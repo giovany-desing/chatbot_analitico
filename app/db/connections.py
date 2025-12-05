@@ -381,35 +381,39 @@ class PostgresConnection:
         Returns:
             Lista de dicts con text, metadata y similarity
         """
+        # Convertir vector a formato pgvector: lista entre corchetes como string
+        vector_str = "[" + ",".join(str(float(v)) for v in query_vector) + "]"
+        
         query = """
         SELECT 
             id,
             text,
             metadata,
-            1 - (vector <=> :query_vector::vector) AS similarity
+            1 - (vector <=> %s::vector) AS similarity
         FROM embeddings
-        WHERE 1 - (vector <=> :query_vector::vector) > :threshold
-        ORDER BY vector <=> :query_vector::vector
-        LIMIT :top_k
+        WHERE 1 - (vector <=> %s::vector) > %s
+        ORDER BY vector <=> %s::vector
+        LIMIT %s
         """
 
         try:
             with self.get_session() as session:
-                result = session.execute(
-                    sql_text(query),
-                    {
-                        "query_vector": str(query_vector),
-                        "threshold": threshold,
-                        "top_k": top_k
-                    }
-                )
+                # Obtener la conexión raw de psycopg2
+                conn = session.connection()
+                cursor = conn.connection.cursor()
+                cursor.execute(query, (vector_str, vector_str, threshold, vector_str, top_k))
+                rows = cursor.fetchall()
+                session.commit()
+                cursor.close()
+                
+                result = rows
 
                 return [
                     {
-                        "id": row.id,
-                        "text": row.text,
-                        "metadata": row.metadata,
-                        "similarity": float(row.similarity)
+                        "id": row[0],
+                        "text": row[1],
+                        "metadata": row[2],
+                        "similarity": float(row[3])
                     }
                     for row in result
                 ]

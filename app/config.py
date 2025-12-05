@@ -1,5 +1,5 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from pydantic import Field, validator
+from pydantic import Field, field_validator
 from typing import Optional
 
 
@@ -67,13 +67,15 @@ class Settings(BaseSettings):
         extra="ignore"  # Ignora variables extra en .env
     )
 
-    @validator("GROQ_API_KEY")
+    @field_validator("GROQ_API_KEY")
+    @classmethod
     def validate_groq_key(cls, v):
         if not v.startswith("gsk_"):
             raise ValueError("GROQ_API_KEY debe empezar con 'gsk_'")
         return v
 
-    @validator("LLM_TEMPERATURE")
+    @field_validator("LLM_TEMPERATURE")
+    @classmethod
     def validate_temperature(cls, v):
         if v < 0 or v > 2:
             raise ValueError("Temperature debe estar entre 0 y 2")

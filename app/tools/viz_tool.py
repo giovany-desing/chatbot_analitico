@@ -3,7 +3,7 @@ Herramienta para generar visualizaciones con Plotly.
 Retorna configuración JSON que puede ser renderizada en frontend.
 """
 
-from langchain.tools import BaseTool
+from langchain_core.tools import BaseTool
 from typing import List, Dict, Any, Optional, Literal
 import plotly.graph_objects as go
 import plotly.express as px

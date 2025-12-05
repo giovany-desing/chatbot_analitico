@@ -34,11 +34,3 @@ pytest
 pytest-asyncio
 pytest-cov
 httpx
-
-sqlparse
-
-# Testing
-pytest
-pytest-asyncio
-pytest-cov
-httpx

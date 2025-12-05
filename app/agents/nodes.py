@@ -639,12 +639,6 @@ def viz_node(state: AgentState) -> AgentState:
           return state
 
 
-def hybrid_node(state: AgentState) -> AgentState:
-    """TODO: Implementar en Fase 4"""
-    logger.info("=== Hybrid Node (TODO) ===")
-    return state
-
-
 # Para testing
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
