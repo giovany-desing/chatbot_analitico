@@ -291,6 +291,10 @@ class PostgresConnection:
     def _initialize(self):
         """Inicializa el engine"""
         try:
+            # Log de conexión (sin password)
+            postgres_url_safe = settings.POSTGRES_URL.split('@')[1] if '@' in settings.POSTGRES_URL else settings.POSTGRES_HOST
+            logger.info(f"Connecting to PostgreSQL: {settings.POSTGRES_USER}@{postgres_url_safe}")
+            
             self.engine = create_engine(
                 settings.POSTGRES_URL,
                 poolclass=pool.QueuePool,
@@ -308,13 +312,22 @@ class PostgresConnection:
                 bind=self.engine
             )
 
-            # Test de conexión
-            self.health_check()
-            logger.info("✅ PostgreSQL connection pool initialized")
+            # Test de conexión (no lanzar excepción, solo log)
+            if self.health_check():
+                logger.info("✅ PostgreSQL connection pool initialized")
+            else:
+                logger.warning("⚠️ PostgreSQL connection pool initialized but health check failed")
+                logger.warning("   The app will continue but RAG features may not work")
 
         except SQLAlchemyError as e:
             logger.error(f"❌ Error initializing PostgreSQL: {e}")
-            raise
+            logger.error(f"   Troubleshooting:")
+            logger.error(f"   1. Verify POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_DB in .env")
+            logger.error(f"   2. Check if PostgreSQL container is running: docker ps")
+            logger.error(f"   3. If volume exists with old credentials, remove it: docker volume rm chatbot_analitico_postgres_data")
+            logger.error(f"   4. Restart containers: docker-compose down && docker-compose up -d")
+            # No lanzar excepción para que la app pueda iniciar sin PostgreSQL (RAG es opcional)
+            # raise
 
     def get_session(self) -> Session:
         """Obtiene una sesión"""
@@ -426,13 +439,24 @@ class PostgresConnection:
         """Verifica que PostgreSQL + pgvector funcionen"""
         try:
             with self.get_session() as session:
-                # Verificar que pgvector esté habilitado
+                # Primero verificar conexión básica
+                result = session.execute(sql_text("SELECT 1"))
+                if result.scalar() != 1:
+                    return False
+                
+                # Luego verificar que pgvector esté habilitado
                 result = session.execute(
                     sql_text("SELECT 1 FROM pg_extension WHERE extname = 'vector'")
                 )
                 return result.scalar() == 1
         except Exception as e:
             logger.error(f"PostgreSQL health check failed: {e}")
+            logger.error(f"   POSTGRES_HOST: {settings.POSTGRES_HOST}")
+            logger.error(f"   POSTGRES_USER: {settings.POSTGRES_USER}")
+            logger.error(f"   POSTGRES_DB: {settings.POSTGRES_DB}")
+            logger.error(f"   Check: 1. Variables de entorno en .env")
+            logger.error(f"         2. Contenedor de PostgreSQL está corriendo")
+            logger.error(f"         3. Credenciales coinciden con las del contenedor")
             return False
 
 

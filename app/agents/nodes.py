@@ -160,6 +160,12 @@ def router_node(state: AgentState) -> AgentState:
         user_query = state['user_query'].lower()
 
         # Detección por keywords (fast path)
+        # Mejorar detección para queries SQL comunes
+        sql_keywords = ['producto', 'productos', 'ventas', 'venta', 'cuántas', 'cuantos', 'cuántos', 
+                       'cuanto', 'cuánto', 'muestra', 'muéstrame', 'lista', 'listar', 'hay', 
+                       'existen', 'existe', 'total', 'suma', 'promedio', 'máximo', 'mínimo',
+                       'correctivas', 'preventivas', 'orden', 'ordenes', 'cliente', 'clientes']
+        
         if any(word in user_query for word in ['gráfica', 'grafica', 'chart', 'plot', 'visualiza']):
             intent = 'viz'
             logger.info(f"Keyword detection: {intent}")
@@ -169,8 +175,13 @@ def router_node(state: AgentState) -> AgentState:
         elif any(word in user_query for word in ['hola', 'ayuda', 'qué puedes', 'que puedes', 'help']):
             intent = 'general'
             logger.info(f"Keyword detection: {intent}")
+        elif any(word in user_query for word in sql_keywords):
+            # Si tiene keywords SQL, ir directo a SQL sin usar LLM
+            intent = 'sql'
+            logger.info(f"SQL keyword detection: {intent}")
         else:
-            # Usar LLM para clasificar
+            # Usar LLM para clasificar (solo si no detectamos keywords)
+            logger.info("No keywords detected, using LLM for classification")
             llm = get_llama_model()
             prompt = get_router_prompt()
 
@@ -224,13 +235,16 @@ def sql_node(state: AgentState) -> AgentState:
         # Obtener schema info
         schema_info = mysql_tool.get_schema_info()
 
-        # **NUEVO: Usar RAG para obtener ejemplos relevantes**
-        relevant_examples = vectorstore.get_relevant_examples(
-              state['user_query'],
-              top_k=3
-        )
-
-        logger.info("Retrieved relevant examples from RAG")
+        # **NUEVO: Usar RAG para obtener ejemplos relevantes (con timeout)**
+        try:
+            relevant_examples = vectorstore.get_relevant_examples(
+                  state['user_query'],
+                  top_k=3
+            )
+            logger.info("Retrieved relevant examples from RAG")
+        except Exception as e:
+            logger.warning(f"RAG search failed or timed out: {e}. Continuing without examples.")
+            relevant_examples = "No hay ejemplos similares disponibles."
 
         # Formatear prompt con ejemplos relevantes
         formatted_prompt = prompt.format(
@@ -306,8 +320,6 @@ def format_results(state: AgentState) -> AgentState:
     logger.info("=== Format Results Node ===")
 
     try:
-        llm = get_llama_model()
-
         # Si hay error, reportarlo
         if state.get('error'):
             response = f"Lo siento, ocurrió un error: {state['error']}"

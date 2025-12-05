@@ -189,13 +189,13 @@ async def chat(request: ChatRequest):
         try:
             result = await asyncio.wait_for(
                 asyncio.to_thread(chatbot_graph.invoke, state),
-                timeout=60.0  # 60 segundos de timeout
+                timeout=120.0  # 120 segundos de timeout (aumentado para LLM)
             )
         except asyncio.TimeoutError:
-            logger.error("Chatbot graph execution timed out after 60 seconds")
+            logger.error("Chatbot graph execution timed out after 120 seconds")
             raise HTTPException(
                 status_code=504,
-                detail="Request timed out. The chatbot is taking too long to respond. Please check database connections."
+                detail="Request timed out. The chatbot is taking too long to respond. This may be due to LLM API delays or database connection issues."
             )
 
         # Extraer respuesta
