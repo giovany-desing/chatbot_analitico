@@ -1,0 +1,112 @@
+version: '3.8'
+
+services:
+  # ============ App (FastAPI) ============
+  app:
+    build: .
+    container_name: chatbot_analitico_app
+    ports:
+      - "8000:8000"
+    environment:
+      # MySQL en AWS RDS (externo)
+      - MYSQL_HOST=${MYSQL_HOST}
+      - MYSQL_PORT=${MYSQL_PORT}
+      - MYSQL_USER=${MYSQL_USER}
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD}
+      - MYSQL_DATABASE=${MYSQL_DATABASE}
+
+      # Redis (local)
+      - REDIS_URL=redis://redis:6379/0
+      - REDIS_TTL=${REDIS_TTL}
+
+      # PostgreSQL (local)
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB}
+
+      # LLM
+      - GROQ_API_KEY=${GROQ_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - LLM_MODEL=${LLM_MODEL}
+      - LLM_TEMPERATURE=${LLM_TEMPERATURE}
+      - LLM_MAX_TOKENS=${LLM_MAX_TOKENS}
+      - LLM_TIMEOUT=${LLM_TIMEOUT}
+
+      # App
+      - APP_NAME=${APP_NAME}
+      - APP_VERSION=${APP_VERSION}
+      - DEBUG=${DEBUG}
+      - LOG_LEVEL=${LOG_LEVEL}
+
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+
+    volumes:
+      - ./app:/app/app
+      - ./data:/app/data
+
+    networks:
+      - chatbot_network
+
+    # En macOS, Docker Desktop puede tener problemas accediendo a servicios externos
+    # Si RDS no es accesible, verifica:
+    # 1. RDS tiene "Publicly accessible" = Yes
+    # 2. Security Group permite 0.0.0.0/0
+    # 3. Network ACLs permiten tráfico
+
+    restart: unless-stopped
+
+    # ============ Redis (Cache) ============
+  redis:
+    image: redis:7-alpine
+    container_name: chatbot_redis
+    ports:
+      - "6379:6379"
+    volumes:
+        - redis_data:/data
+    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks:
+      - chatbot_network
+    restart: unless-stopped
+
+    # ============ PostgreSQL + pgvector (RAG) ============
+  postgres:
+    image: ankane/pgvector:latest
+    container_name: chatbot_postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init_postgres.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - chatbot_network
+    restart: unless-stopped
+
+volumes:
+  redis_data:
+  postgres_data:
+  
+
+networks:
+  chatbot_network:
+    driver: bridge

@@ -1,0 +1,82 @@
+{
+  "sql_examples": [
+    {
+      "question": "¿Cuántas ventas preventivas tenemos?",
+      "sql": "SELECT COUNT(*) as total FROM ventas_preventivas",
+      "description": "Conteo total de ventas preventivas"
+    },
+    {
+      "question": "¿Cuáles son los productos más vendidos en preventivas?",
+      "sql": "SELECT producto, SUM(cantidad) as unidades FROM ventas_preventivas GROUP BY producto ORDER BY unidades DESC LIMIT 10",
+      "description": "Top 10 productos en ventas preventivas"
+    },
+    {
+      "question": "¿Cuál es el revenue total de correctivas?",
+      "sql": "SELECT SUM(total) as revenue FROM ventas_correctivas",
+      "description": "Ingresos totales de ventas correctivas"
+    },
+    {
+      "question": "Compara preventivas vs correctivas",
+      "sql": "SELECT 'Preventivas' as tipo, COUNT(*) as ordenes, SUM(total) as revenue FROM ventas_preventivas UNION ALL SELECT 'Correctivas' as tipo, COUNT(*) as ordenes, SUM(total) as revenue FROM ventas_correctivas",
+      "description": "Comparación entre tipos de ventas"
+    }
+  ],
+
+  "kpi_definitions": {
+    "revenue_preventivas": {
+      "name": "Revenue Ventas Preventivas",
+      "formula": "SUM(total)",
+      "sql": "SELECT SUM(total) as revenue FROM ventas_preventivas",
+      "description": "Ingresos totales de ventas preventivas",
+      "format": "currency"
+    },
+    "revenue_correctivas": {
+      "name": "Revenue Ventas Correctivas",
+      "formula": "SUM(total)",
+      "sql": "SELECT SUM(total) as revenue FROM ventas_correctivas",
+      "description": "Ingresos totales de ventas correctivas",
+      "format": "currency"
+    },
+    "total_ordenes": {
+      "name": "Total Órdenes",
+      "formula": "COUNT(*)",
+      "sql": "SELECT COUNT(*) as total FROM (SELECT * FROM ventas_preventivas UNION ALL SELECT * FROM ventas_correctivas) as todas",
+      "description": "Número total de órdenes (preventivas + correctivas)",
+      "format": "number"
+    },
+    "unidades_totales": {
+      "name": "Unidades Totales Vendidas",
+      "formula": "SUM(cantidad)",
+      "sql": "SELECT SUM(cantidad) as unidades FROM (SELECT cantidad FROM ventas_preventivas UNION ALL SELECT cantidad FROM ventas_correctivas) as todas",
+      "description": "Total de unidades vendidas en ambos tipos",
+      "format": "number"
+    },
+    "ticket_promedio": {
+      "name": "Ticket Promedio",
+      "formula": "AVG(total)",
+      "sql": "SELECT AVG(total) as ticket FROM (SELECT total FROM ventas_preventivas UNION ALL SELECT total FROM ventas_correctivas) as todas",
+      "description": "Valor promedio de cada orden",
+      "format": "currency"
+    },
+    "ratio_preventivas_correctivas": {
+      "name": "Ratio Preventivas/Correctivas",
+      "formula": "(COUNT preventivas / COUNT correctivas) * 100",
+      "sql": "SELECT (SELECT COUNT(*) FROM ventas_preventivas) / (SELECT COUNT(*) FROM ventas_correctivas) * 100 as ratio",
+      "description": "Proporción de ventas preventivas vs correctivas (%)",
+      "format": "percentage"
+    }
+  },
+
+  "table_schemas": {
+    "ventas_preventivas": {
+      "columns": ["id", "orden_compra", "producto", "fecha_creacion", "cantidad", "total"],
+      "primary_key": "id",
+      "description": "Órdenes de ventas planificadas con anticipación"
+    },
+    "ventas_correctivas": {
+      "columns": ["id", "orden_compra", "producto", "fecha_creacion", "cantidad", "total"],
+      "primary_key": "id",
+      "description": "Órdenes de corrección o ajuste posterior"
+    }
+  }
+}
