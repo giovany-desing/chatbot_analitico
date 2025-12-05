@@ -61,6 +61,20 @@ services:
 
     restart: unless-stopped
 
+  # ============ Frontend (Streamlit) ============
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    container_name: chatbot_frontend
+    ports:
+      - "8501:8501"
+    depends_on:
+      - app
+    networks:
+      - chatbot_network
+    restart: unless-stopped
+
     # ============ Redis (Cache) ============
   redis:
     image: redis:7-alpine

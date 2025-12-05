@@ -34,3 +34,10 @@ pytest
 pytest-asyncio
 pytest-cov
 httpx
+
+# Frontend (Streamlit)
+streamlit
+requests
+
+# Frontend alternativo (Gradio)
+gradio
