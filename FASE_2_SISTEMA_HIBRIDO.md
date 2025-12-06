@@ -746,7 +746,7 @@ from app.intelligence.hybrid_system import HybridVizSystem
 
 # Inicializar
 system = HybridVizSystem(
-    finetuned_endpoint="https://tu-endpoint.modal.run"
+    finetuned_endpoint="https://egsamaca56--viz-expert-model-predict.modal.run"
 )
 
 # Test cases

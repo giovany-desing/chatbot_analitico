@@ -27,7 +27,9 @@ print(f"📦 Payload:")
 print(json.dumps(payload, indent=2, ensure_ascii=False))
 
 try:
-    response = requests.post(ENDPOINT_URL, json=payload, timeout=120)
+    # Timeout de 15 minutos (900 segundos) para permitir carga inicial del modelo
+    print("⏳ Esperando respuesta (puede tardar varios minutos en la primera carga)...")
+    response = requests.post(ENDPOINT_URL, json=payload, timeout=900)
     response.raise_for_status()
     
     result = response.json()

@@ -80,6 +80,13 @@ class Settings(BaseSettings):
         if v < 0 or v > 2:
             raise ValueError("Temperature debe estar entre 0 y 2")
         return v
+    
+    # ============ Fine-tuned Model ============
+    FINETUNED_MODEL_ENDPOINT: str = Field(
+        default="",
+        description="URL del modelo fine-tuned en Modal.com"
+    )
+    
 
 
 # Singleton: una sola instancia en toda la app

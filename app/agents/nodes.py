@@ -11,6 +11,13 @@ import json
 from pathlib import Path
 from app.tools.viz_tool import viz_tool
 from app.rag.vectorstore import vectorstore
+from app.intelligence.hybrid_system import HybridVizSystem
+from app.config import settings
+from app.tools.professional_viz import professional_viz_tool
+
+hybrid_viz = HybridVizSystem(
+    finetuned_endpoint=settings.FINETUNED_MODEL_ENDPOINT
+)
 
 # Agregar el directorio raíz del proyecto al PYTHONPATH si se ejecuta directamente
 if __name__ == "__main__":
@@ -542,113 +549,75 @@ def kpi_node(state: AgentState) -> AgentState:
 
 
 def viz_node(state: AgentState) -> AgentState:
-      """
-      Genera visualizaciones de datos.
-      
-      Flujo:
-      1. Si no hay sql_results, ejecutar query primero
-      2. Determinar tipo de gráfica apropiado
-      3. Generar configuración de Plotly
-      
-      Args:
-          state: Estado actual
-      
-      Returns:
-          Estado con 'chart_config' actualizado
-      """
-      logger.info("=== Viz Node ===")
+    """
+    Genera visualizaciones usando sistema híbrido.
+    """
+    logger.info("=== Viz Node (Hybrid) ===")
 
-      try:
-          # Si no hay datos, ejecutar query primero
-          if not state.get('sql_results'):
-              logger.info("No data available, executing SQL first")
-              state = sql_node(state)
+    try:
+        # Si no hay datos, ejecutar SQL primero
+        if not state.get('sql_results'):
+            logger.info("No data available, executing SQL first")
+            state = sql_node(state)
 
-          results = state.get('sql_results', [])
+        results = state.get('sql_results', [])
 
-          if not results:
-              raise ValueError("No data available for visualization")
+        if not results:
+            raise ValueError("No data available for visualization")
 
-          # Convertir a DataFrame para análisis
-          df = pd.DataFrame(results)
+        # USAR SISTEMA HÍBRIDO
+        logger.info("Using HybridVizSystem for chart decision")
+        chart_config = hybrid_viz.decide_chart(
+            query=state['user_query'],
+            sql_results=results
+        )
+        logger.info("Generating professional chart")
+        chart_result = professional_viz_tool.create_chart(
+            data=results,
+            chart_type=chart_config.get('chart_type'),
+            config=chart_config
+        )
 
-          logger.info(f"Visualizing {len(df)} rows, {len(df.columns)} columns")
+        logger.info(f"Chart decided: {chart_config.get('chart_type')} (source: {chart_config.get('source')})")
 
-          # Usar LLM para determinar configuración de la gráfica
-          llm = get_llama_model()
-          prompt = get_viz_prompt()
+        # Generar gráfica con viz_tool
+        from app.tools.viz_tool import viz_tool
 
-          formatted_prompt = prompt.format(
-              sql_results=json.dumps(results[:5], indent=2),  # Solo primeras 5 filas
-              user_query=state['user_query']
-          )
+        chart_result = viz_tool._run(
+            data=results,
+            chart_type=chart_config.get('chart_type'),
+            x_column=chart_config.get('x_column'),
+            y_column=chart_config.get('y_column'),
+            title=chart_config.get('title'),
+            x_label=chart_config.get('x_label'),
+            y_label=chart_config.get('y_label')
+        )
 
-          viz_config_str = invoke_llm_with_retry(
-              llm,
-              [{"role": "user", "content": formatted_prompt}]
-          )
+        # Actualizar estado
+        state['chart_config'] = chart_result
+        state['intermediate_steps'].append({
+            'node': 'viz',
+            'chart_type': chart_config.get('chart_type'),
+            'decision_source': chart_config.get('source'),
+            'reasoning': chart_config.get('reasoning')
+        })
 
-          # Limpiar y parsear JSON
-          viz_config_str = viz_config_str.strip()
-          if viz_config_str.startswith('```json'):
-              viz_config_str = viz_config_str.split('```json')[1].split('```')[0].strip()
-          elif viz_config_str.startswith('```'):
-              viz_config_str = viz_config_str.split('```')[1].split('```')[0].strip()
+        # Mensaje
+        response = f"📊 He generado una gráfica de tipo **{chart_config.get('chart_type')}**.\n\n"
+        response += f"**Fuente de decisión:** {chart_config.get('source')}\n"
+        response += f"**Razonamiento:** {chart_config.get('reasoning')}\n"
 
-          try:
-              viz_config = json.loads(viz_config_str)
-          except json.JSONDecodeError:
-              # Fallback: auto-detect
-              logger.warning("Could not parse LLM response, using auto-detection")
-              viz_config = {
-                  "chart_type": viz_tool.auto_select_chart_type(df),
-                  "x_column": df.columns[0],
-                  "y_column": df.columns[1] if len(df.columns) > 1 else df.columns[0],
-                  "title": f"Visualización de {df.columns[0]}",
-                  "x_label": df.columns[0],
-                  "y_label": df.columns[1] if len(df.columns) > 1 else "Valor"
-              }
+        from langchain_core.messages import AIMessage
+        state['messages'].append(AIMessage(content=response))
 
-          logger.info(f"Creating {viz_config['chart_type']} chart")
+        logger.info("✓ Viz node completed with hybrid system")
 
-          # Generar gráfica
-          chart_result = viz_tool._run(
-              data=results,
-              chart_type=viz_config['chart_type'],
-              x_column=viz_config.get('x_column'),
-              y_column=viz_config.get('y_column'),
-              title=viz_config.get('title'),
-              x_label=viz_config.get('x_label'),
-              y_label=viz_config.get('y_label')
-          )
+        return state
 
-          # Actualizar estado
-          state['chart_config'] = chart_result
-          state['intermediate_steps'].append({
-              'node': 'viz',
-              'chart_type': viz_config['chart_type'],
-              'data_points': len(df)
-          })
-
-          # Añadir mensaje
-          response = f"📊 He generado una gráfica de tipo **{viz_config['chart_type']}** con {len(df)} puntos de datos.\n\n"
-          response += f"**Configuración:**\n"
-          response += f"- Eje X: {viz_config.get('x_column')}\n"
-          response += f"- Eje Y: {viz_config.get('y_column')}\n"
-          response += f"- Título: {viz_config.get('title')}\n\n"
-          response += f"*(La gráfica interactiva está disponible en el campo 'chart_config' de la respuesta)*"
-
-          state['messages'].append(AIMessage(content=response))
-
-          logger.info(f"✓ Chart generated: {viz_config['chart_type']}")
-
-          return state
-
-      except Exception as e:
-          logger.error(f"Error in viz_node: {e}")
-          state['error'] = str(e)
-          state['chart_config'] = None
-          return state
+    except Exception as e:
+        logger.error(f"Error in viz_node: {e}")
+        state['error'] = str(e)
+        return state
 
 
 # Para testing

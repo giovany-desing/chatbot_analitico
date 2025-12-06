@@ -21,7 +21,8 @@ numpy
 plotly
 sentence-transformers
 torch
-
+scipy
+kaleido
 # Utilidades
 python-dotenv
 pydantic

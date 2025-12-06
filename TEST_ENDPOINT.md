@@ -30,7 +30,97 @@ Esto ejecutará múltiples casos de prueba y generará un resumen con:
 - 📊 Validación de respuestas
 - 💾 Resultados guardados en `test_results.json`
 
-### 3. Usando cURL (Terminal)
+### 3. Usando Postman (Recomendado para pruebas interactivas)
+
+#### Configuración en Postman:
+
+1. **Crear nueva petición:**
+   - Método: `POST`
+   - URL: `https://egsamaca56--viz-expert-model-predict.modal.run`
+
+2. **Headers:**
+   - Agregar header: `Content-Type: application/json`
+
+3. **Body:**
+   - Seleccionar: `raw` → `JSON`
+   - Pegar el siguiente JSON:
+
+```json
+{
+  "user_query": "Muestra los 10 productos más vendidos",
+  "sql_query": "SELECT producto, SUM(cantidad) as total FROM ventas_preventivas GROUP BY producto ORDER BY total DESC LIMIT 10",
+  "columns": ["producto", "total"],
+  "num_rows": 10,
+  "data_preview": [
+    {
+      "producto": "Tela Algodón",
+      "total": 5000
+    },
+    {
+      "producto": "Tela Poliéster",
+      "total": 4500
+    },
+    {
+      "producto": "Tela Lino",
+      "total": 3000
+    }
+  ]
+}
+```
+
+4. **Settings importantes:**
+   - ⚠️ **Timeout**: Configurar timeout a **900 segundos (15 minutos)** en Settings → General → Request timeout
+   - La primera petición puede tardar varios minutos (carga inicial del modelo)
+
+5. **Enviar petición:**
+   - Click en "Send"
+   - Esperar la respuesta (puede tardar varios minutos la primera vez)
+
+#### Ejemplo de respuesta exitosa:
+
+```json
+{
+  "chart_type": "bar",
+  "reasoning": "Query de ranking (top N). Bar chart es ideal para comparar cantidades entre categorías y mostrar orden.",
+  "config": {
+    "x_axis": "producto",
+    "y_axis": "total",
+    "title": "Muestra los 10 productos más vendidos"
+  }
+}
+```
+
+#### Otros casos de prueba para Postman:
+
+**Caso 2: Serie temporal (Line Chart)**
+```json
+{
+  "user_query": "Muestra las ventas por mes del último año",
+  "sql_query": "SELECT mes, SUM(ventas) as total_ventas FROM ventas WHERE fecha >= DATE_SUB(NOW(), INTERVAL 12 MONTH) GROUP BY mes ORDER BY mes",
+  "columns": ["mes", "total_ventas"],
+  "num_rows": 12,
+  "data_preview": [
+    {"mes": "2024-01", "total_ventas": 15000},
+    {"mes": "2024-02", "total_ventas": 18000}
+  ]
+}
+```
+
+**Caso 3: Distribución (Pie Chart)**
+```json
+{
+  "user_query": "Muestra la distribución de productos por categoría",
+  "sql_query": "SELECT categoria, COUNT(*) as cantidad FROM productos GROUP BY categoria",
+  "columns": ["categoria", "cantidad"],
+  "num_rows": 5,
+  "data_preview": [
+    {"categoria": "Telas", "cantidad": 45},
+    {"categoria": "Hilos", "cantidad": 30}
+  ]
+}
+```
+
+### 4. Usando cURL (Terminal)
 
 ```bash
 curl -X POST https://egsamaca56--viz-expert-model-predict.modal.run \
@@ -47,7 +137,7 @@ curl -X POST https://egsamaca56--viz-expert-model-predict.modal.run \
   }'
 ```
 
-### 4. Usando Python Interactivo
+### 5. Usando Python Interactivo
 
 ```python
 import requests
