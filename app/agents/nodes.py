@@ -646,3 +646,39 @@ if __name__ == "__main__":
     print("3. Testing format_results:")
     state = format_results(state)
     print(f"   Response: {state['messages'][-1].content[:200]}...")
+    
+from ..feedback.feedback_service import feedback_service
+import time
+
+
+def track_interaction_node(state: State) -> State:
+    """
+    Nodo para rastrear la interacción y guardar métricas
+    Se ejecuta al final del workflow
+    """
+    start_time = time.time()
+
+    try:
+        # Calcular tiempo de respuesta
+        response_time_ms = int((time.time() - state.get('start_time', start_time)) * 1000)
+
+        # Guardar interacción
+        feedback_id = feedback_service.save_interaction(
+            session_id=state.get('session_id', 'unknown'),
+            user_query=state['user_query'],
+            sql_generated=state.get('sql_query'),
+            chart_type=state.get('chart_config', {}).get('type'),
+            chart_config=state.get('chart_config'),
+            response_time_ms=response_time_ms,
+            error_occurred=bool(state.get('error')),
+            error_message=state.get('error')
+        )
+
+        # Agregar feedback_id al state para el frontend
+        state['feedback_id'] = feedback_id
+
+    except Exception as e:
+        logger.error(f"Error guardando feedback: {e}")
+        # No fallar el workflow por error de tracking
+
+    return state

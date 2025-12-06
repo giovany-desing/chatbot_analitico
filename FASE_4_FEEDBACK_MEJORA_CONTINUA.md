@@ -554,24 +554,45 @@ if st.sidebar.button("Ver Métricas"):
 
 **Modificar:** `docker-compose.yml`
 
-Agregar volumen para migraciones en el servicio postgres:
+Agregar volumen para migraciones en el servicio `postgres`. Busca la sección `volumes:` del servicio `postgres` y agrega la línea para montar el directorio de migraciones:
 
+**Antes:**
 ```yaml
   postgres:
-    image: pgvector/pgvector:pg16
+    image: ankane/pgvector:latest
     container_name: chatbot_postgres
-    environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: vectordb
     ports:
       - "5432:5432"
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./migrations:/migrations  # Agregar esta línea
-    networks:
-      - chatbot_network
+      - ./scripts/init_postgres.sql:/docker-entrypoint-initdb.d/init.sql
 ```
+
+**Después:**
+```yaml
+  postgres:
+    image: ankane/pgvector:latest
+    container_name: chatbot_postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init_postgres.sql:/docker-entrypoint-initdb.d/init.sql
+      - ./migrations:/migrations  # ← Agregar esta línea para montar el directorio de migraciones
+```
+
+**Explicación:**
+- `./migrations:/migrations` monta el directorio local `./migrations` en `/migrations` dentro del contenedor
+- Esto permite ejecutar migraciones SQL directamente desde el contenedor usando la ruta `/migrations/`
+- Después de agregar esta línea, reinicia el contenedor: `docker-compose restart postgres`
 
 ### 7. Crear Script de Reentrenamiento Automático
 
@@ -766,26 +787,35 @@ if __name__ == "__main__":
 **Ejecutar:**
 
 ```bash
-docker-compose exec app pytest tests/test_feedback_service.py -v
+# Con flag -s para mostrar los prints de los tests
+docker-compose exec app pytest tests/test_feedback_service.py -v -s
 ```
 
 **Output esperado:**
 
 ```
-tests/test_feedback_service.py::test_save_and_update_interaction PASSED
-tests/test_feedback_service.py::test_metrics PASSED
-tests/test_feedback_service.py::test_export_retraining PASSED
+============================= test session starts ==============================
+platform linux -- Python 3.11.14, pytest-9.0.1, pluggy-1.6.0 -- /usr/local/bin/python
+cachedir: .pytest_cache
+rootdir: /app
+plugins: timeout-2.4.0, asyncio-1.3.0, anyio-4.12.0, cov-7.0.0, langsmith-0.4.56
+collecting ... collected 3 items
 
-✅ Interacción guardada con ID: 1
+tests/test_feedback_service.py::test_save_and_update_interaction ✅ Interacción guardada con ID: 1
 ✅ Rating actualizado correctamente
 ✅ No aparece en queries de baja valoración
-✅ Métricas generadas correctamente:
+PASSED
+tests/test_feedback_service.py::test_metrics ✅ Métricas generadas correctamente:
    Total interacciones: 15
    Rating promedio: 4.2
-✅ Exportados 5 ejemplos para reentrenamiento
+PASSED
+tests/test_feedback_service.py::test_export_retraining ✅ Exportados 5 ejemplos para reentrenamiento
+PASSED
 
-==================== 3 passed in 1.23s ====================
+============================== 3 passed in 1.23s ===============================
 ```
+
+**Nota:** El flag `-s` (o `--capture=no`) es necesario para ver los mensajes de `print()` dentro de los tests. Sin este flag, pytest captura la salida y solo la muestra si hay errores.
 
 ### Prueba 3: Test de API Endpoints
 

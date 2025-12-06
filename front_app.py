@@ -10,6 +10,12 @@ import pandas as pd
 from typing import Optional, Dict, Any
 import json
 
+import uuid
+
+# Generar session_id persistente
+if 'session_id' not in st.session_state:
+    st.session_state.session_id = str(uuid.uuid4())
+
 # ============ Configuración ============
 
 import os
@@ -20,6 +26,7 @@ st.set_page_config(
     page_icon="📊",
     layout="wide",
     initial_sidebar_state="expanded"
+
 )
 
 # ============ Funciones Helper ============
@@ -155,7 +162,46 @@ with st.sidebar:
         except:
             st.error("❌ No se pudo conectar con la API")
 
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("### 📊 Analytics")
 
+    if st.sidebar.button("Ver Métricas"):
+        try:
+            metrics_response = requests.get(f"{API_URL}/metrics?days=7", timeout=10)
+            if metrics_response.status_code == 200:
+                metrics = metrics_response.json()
+
+                st.markdown("## 📈 Métricas de los Últimos 7 Días")
+
+                # Métricas generales
+                gen = metrics['general']
+                col1, col2, col3 = st.columns(3)
+                col1.metric("Total Interacciones", gen['total_interactions'])
+                col2.metric("Rating Promedio", f"{gen['avg_rating']}/5.0")
+                col3.metric("Tiempo Respuesta (avg)", f"{gen['avg_response_time_ms']}ms")
+
+                # Distribución de ratings
+                if metrics['rating_distribution']:
+                    st.markdown("### Distribución de Ratings")
+                    rating_df = pd.DataFrame([
+                        {'Rating': f"{k}⭐", 'Cantidad': v}
+                        for k, v in metrics['rating_distribution'].items()
+                    ])
+                    st.bar_chart(rating_df.set_index('Rating'))
+
+                # Charts más usados
+                if metrics['top_charts']:
+                    st.markdown("### Gráficos Más Usados")
+                    charts_df = pd.DataFrame(metrics['top_charts'])
+                    st.dataframe(charts_df)
+
+                # Errores comunes
+                if metrics['top_errors']:
+                    st.markdown("### Errores Más Comunes")
+                    errors_df = pd.DataFrame(metrics['top_errors'])
+                    st.dataframe(errors_df)
+        except Exception as e:
+            st.error(f"Error obteniendo métricas: {e}")
 # ============ Main App ============
 
 st.title("📊 Chatbot Analítico")
@@ -218,6 +264,54 @@ if user_input:
             # Renderizar gráfico si existe
             if response.get("chart_config"):
                 render_chart(response["chart_config"])
+                
+            if 'feedback_id' in response:
+                st.markdown("---")
+                st.markdown("**¿Qué te pareció esta respuesta?**")
+
+                col1, col2, col3, col4, col5, col6 = st.columns([1, 1, 1, 1, 1, 3])
+
+                rating = None
+                with col1:
+                    if st.button("⭐", key=f"rate1_{response['feedback_id']}"):
+                        rating = 1
+                with col2:
+                    if st.button("⭐⭐", key=f"rate2_{response['feedback_id']}"):
+                        rating = 2
+                with col3:
+                    if st.button("⭐⭐⭐", key=f"rate3_{response['feedback_id']}"):
+                        rating = 3
+                with col4:
+                    if st.button("⭐⭐⭐⭐", key=f"rate4_{response['feedback_id']}"):
+                        rating = 4
+                with col5:
+                    if st.button("⭐⭐⭐⭐⭐", key=f"rate5_{response['feedback_id']}"):
+                        rating = 5
+
+                if rating:
+                    # Opcional: pedir comentario para ratings bajos
+                    feedback_text = None
+                    if rating <= 3:
+                        feedback_text = st.text_input(
+                            "¿Qué podemos mejorar?",
+                            key=f"feedback_text_{response['feedback_id']}"
+                        )
+
+                    # Enviar feedback
+                    try:
+                        feedback_response = requests.post(
+                            f"{API_URL}/feedback",
+                            json={
+                                "feedback_id": response['feedback_id'],
+                                "rating": rating,
+                                "feedback_text": feedback_text
+                            },
+                            timeout=5
+                        )
+                        if feedback_response.status_code == 200:
+                            st.success(f"¡Gracias por tu valoración de {rating} estrellas!")
+                    except Exception as e:
+                        st.error(f"Error enviando feedback: {e}")
 
             # Renderizar tabla si existen resultados
             if response.get("results"):

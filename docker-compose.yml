@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   # ============ App (FastAPI) ============
   app:
@@ -49,6 +47,7 @@ services:
     volumes:
       - ./app:/app/app
       - ./data:/app/data
+      - ./tests:/app/tests  # Volumen para tests
 
     networks:
       - chatbot_network
@@ -106,6 +105,7 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./scripts/init_postgres.sql:/docker-entrypoint-initdb.d/init.sql
+      - ./migrations:/migrations  # Volumen para migraciones SQL
     healthcheck:
       test: ["CMD-SHELL", "pg_isready || exit 1"]
       interval: 10s
@@ -115,6 +115,8 @@ services:
     networks:
       - chatbot_network
     restart: unless-stopped
+
+    
 
 volumes:
   redis_data:

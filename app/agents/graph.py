@@ -5,6 +5,7 @@ Grafo LangGraph que orquesta el flujo del chatbot.
 import sys
 import os
 from pathlib import Path
+from .nodes import track_interaction_node
 
 # Agregar el directorio raíz del proyecto al PYTHONPATH si se ejecuta directamente
 if __name__ == "__main__":
@@ -69,6 +70,7 @@ def create_chatbot_graph():
     workflow.add_node("hybrid", hybrid_node)
     workflow.add_node("format_results", format_results)
 
+
     # Punto de entrada
     workflow.set_entry_point("router")
 
@@ -91,9 +93,18 @@ def create_chatbot_graph():
     workflow.add_edge("viz", "format_results")
     workflow.add_edge("general", "format_results")
     workflow.add_edge("hybrid", "format_results")
+    
+        
+    # Conectar todos los nodos finales al tracking
+    workflow.add_edge("sql", "track")
+    workflow.add_edge("hybrid", "track")
+    workflow.add_edge("format_results", "track")
+    
+    workflow.add_node("track", track_interaction_node)
 
     # format_results va a END
     workflow.add_edge("format_results", END)
+    workflow.set_finish_point("track")
 
     # Compilar
     app = workflow.compile()

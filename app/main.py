@@ -26,6 +26,21 @@ from app.agents.state import create_initial_state
 from app.db.connections import check_all_connections
 from app.services.cache_service import cache_service
 
+from .feedback.feedback_service import feedback_service
+from pydantic import BaseModel, Field
+
+class FeedbackRequest(BaseModel):
+    feedback_id: int = Field(..., description="ID de la interacción")
+    rating: int = Field(..., ge=1, le=5, description="Rating de 1 a 5")
+    feedback_text: Optional[str] = Field(None, description="Comentario opcional")
+
+class MetricsResponse(BaseModel):
+    period_days: int
+    general: Dict
+    rating_distribution: Dict[int, int]
+    top_charts: List[Dict]
+    top_errors: List[Dict]
+
 # Configurar logging
 logging.basicConfig(
     level=getattr(logging, settings.LOG_LEVEL),
@@ -283,6 +298,64 @@ async def cache_stats():
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+    
+    
+@app.post("/feedback", tags=["Feedback"])
+async def submit_feedback(feedback: FeedbackRequest):
+    """
+    Enviar valoración de una interacción
+    """
+    try:
+        success = feedback_service.update_rating(
+            feedback_id=feedback.feedback_id,
+            rating=feedback.rating,
+            feedback_text=feedback.feedback_text
+        )
+        if success:
+            return {"status": "success", "message": "Feedback guardado correctamente"}
+        else:
+            raise HTTPException(status_code=404, detail="Interacción no encontrada")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error guardando feedback: {str(e)}")
+
+@app.get("/metrics", response_model=MetricsResponse, tags=["Analytics"])
+async def get_metrics(days: int = 7):
+    """
+    Obtener métricas de rendimiento de los últimos N días
+    """
+    try:
+        metrics = feedback_service.get_metrics(days=days)
+        return metrics
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error obteniendo métricas: {str(e)}")
+
+@app.get("/analytics/low-rated", tags=["Analytics"])
+async def get_low_rated_queries(min_rating: int = 2, limit: int = 50):
+    """
+    Obtener queries con baja valoración para análisis
+    """
+    try:
+        queries = feedback_service.get_low_rated_queries(min_rating=min_rating, limit=limit)
+        return {"count": len(queries), "queries": queries}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error obteniendo queries: {str(e)}")
+
+@app.post("/analytics/export-retraining", tags=["Analytics"])
+async def export_retraining_data(max_rating: int = 3):
+    """
+    Exportar datos para reentrenamiento del modelo
+    """
+    try:
+        count = feedback_service.export_for_retraining(max_rating=max_rating)
+        return {
+            "status": "success",
+            "examples_exported": count,
+            "file": "retraining_data.jsonl"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error exportando datos: {str(e)}")
 
 
 # ============ Main ============
