@@ -8,6 +8,15 @@ from langgraph.graph.message import add_messages
 from langchain_core.messages import BaseMessage
 
 
+def keep_first(left: str, right: str) -> str:
+    """Reducer para user_query: mantiene el primer valor no vacío"""
+    # Si left está vacío pero right tiene valor, usar right
+    if not left or left.strip() == '':
+        return right if right else left
+    # Si left tiene valor, mantenerlo (prioridad)
+    return left
+
+
 class AgentState(TypedDict):
     """
     Estado del agente que fluye a través del grafo.
@@ -31,8 +40,8 @@ class AgentState(TypedDict):
     # Historial de mensajes (LangGraph gestiona automáticamente)
     messages: Annotated[List[BaseMessage], add_messages]
 
-    # Query del usuario
-    user_query: str
+    # Query del usuario (no debería cambiar, pero usamos reducer para evitar conflictos)
+    user_query: Annotated[str, keep_first]
 
     # Intención clasificada por router_node
     intent: Optional[str]
@@ -51,6 +60,11 @@ class AgentState(TypedDict):
     context: Dict[str, Any]
     error: Optional[str]
     intermediate_steps: List[Dict[str, Any]]
+    
+    # ===== Tracking =====
+    session_id: Optional[str]
+    start_time: Optional[float]
+    feedback_id: Optional[int]
 
 
 # Función helper para crear estado inicial
@@ -64,9 +78,16 @@ def create_initial_state(user_query: str) -> AgentState:
     Returns:
         AgentState con valores iniciales
     """
+    import time
+    import uuid
+    
+    # Asegurar que user_query no esté vacío
+    if not user_query or not str(user_query).strip():
+        raise ValueError(f"user_query cannot be empty. Received: '{user_query}'")
+    
     return AgentState(
         messages=[],
-        user_query=user_query,
+        user_query=str(user_query).strip(),  # Asegurar que sea string y no vacío
         intent=None,
         sql_query=None,
         sql_results=None,
@@ -74,7 +95,10 @@ def create_initial_state(user_query: str) -> AgentState:
         chart_config=None,
         context={},
         error=None,
-        intermediate_steps=[]
+        intermediate_steps=[],
+        session_id=str(uuid.uuid4()),
+        start_time=time.time(),
+        feedback_id=None
     )
 
 

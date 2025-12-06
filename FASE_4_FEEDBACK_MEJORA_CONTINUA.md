@@ -820,18 +820,47 @@ PASSED
 ### Prueba 3: Test de API Endpoints
 
 ```bash
-# 1. Hacer una query para obtener un feedback_id
+# Opción 1: Usar el chatbot (crea interacción automáticamente)
+# 1. Hacer consulta al chatbot (esto crea automáticamente una interacción)
 curl -X POST http://localhost:8000/chat \
   -H "Content-Type: application/json" \
-  -d '{"query": "¿Cuántas ventas hay?"}' | jq '.feedback_id'
+  -d '{"message": "¿Cuántas ventas hay?"}' | jq '.feedback_id'
 
-# Supongamos que devuelve: 42
+# El response incluirá un campo "feedback_id" que puedes usar para enviar feedback
+# Ejemplo de respuesta:
+# {
+#   "response": "...",
+#   "intent": "sql",
+#   "feedback_id": 42,
+#   ...
+# }
 
-# 2. Enviar rating
+# 2. Enviar rating usando el feedback_id obtenido
 curl -X POST http://localhost:8000/feedback \
   -H "Content-Type: application/json" \
   -d '{
     "feedback_id": 42,
+    "rating": 5,
+    "feedback_text": "Muy buena respuesta"
+  }'
+
+# Opción 2: Crear interacción de prueba (para testing rápido)
+# 1. Crear una interacción de prueba
+curl -X POST http://localhost:8000/feedback/test-interaction \
+  -H "Content-Type: application/json"
+
+# Respuesta:
+# {
+#   "status": "success",
+#   "message": "Interacción de prueba creada",
+#   "feedback_id": 1
+# }
+
+# 2. Enviar feedback usando el feedback_id obtenido
+curl -X POST http://localhost:8000/feedback \
+  -H "Content-Type: application/json" \
+  -d '{
+    "feedback_id": 1,
     "rating": 5,
     "feedback_text": "Muy buena respuesta"
   }'

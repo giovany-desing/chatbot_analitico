@@ -119,6 +119,7 @@ class ChatResponse(BaseModel):
     kpis: Optional[Dict[str, Any]] = Field(None, description="KPIs calculados (si aplica)")
     chart_config: Optional[Dict[str, Any]] = Field(None, description="Configuración de gráfica Plotly (si aplica)")
     error: Optional[str] = Field(None, description="Error si ocurrió")
+    feedback_id: Optional[int] = Field(None, description="ID de la interacción guardada (para enviar feedback)")
 
     class Config:
         json_schema_extra = {
@@ -226,7 +227,8 @@ async def chat(request: ChatRequest):
             results=result.get('sql_results'),
             kpis=result.get('kpis'),
             chart_config=result.get('chart_config'),
-            error=result.get('error')
+            error=result.get('error'),
+            feedback_id=result.get('feedback_id')  # ID de la interacción guardada
         )
 
         logger.info(f"Response intent: {response.intent}")
@@ -341,6 +343,30 @@ async def get_low_rated_queries(min_rating: int = 2, limit: int = 50):
         return {"count": len(queries), "queries": queries}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error obteniendo queries: {str(e)}")
+
+@app.post("/feedback/test-interaction", tags=["Feedback"])
+async def create_test_interaction():
+    """
+    Crea una interacción de prueba para testing del sistema de feedback.
+    Retorna el feedback_id que puedes usar para enviar feedback.
+    """
+    try:
+        feedback_id = feedback_service.save_interaction(
+            session_id="test_session",
+            user_query="¿Cuántas ventas hay?",
+            sql_generated="SELECT COUNT(*) FROM ventas",
+            chart_type="bar",
+            chart_config={"type": "bar", "title": "Test Chart"},
+            response_time_ms=250,
+            error_occurred=False
+        )
+        return {
+            "status": "success",
+            "message": "Interacción de prueba creada",
+            "feedback_id": feedback_id
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error creando interacción de prueba: {str(e)}")
 
 @app.post("/analytics/export-retraining", tags=["Analytics"])
 async def export_retraining_data(max_rating: int = 3):

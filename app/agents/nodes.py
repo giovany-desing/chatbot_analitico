@@ -162,30 +162,111 @@ def router_node(state: AgentState) -> AgentState:
         Estado con 'intent' actualizado
     """
     logger.info("=== Router Node ===")
+    
+    # Obtener user_query del estado - puede estar en diferentes lugares
+    user_query = state.get('user_query') or ''
+    
+    # Si está vacío, intentar obtenerlo de los mensajes
+    if not user_query and state.get('messages'):
+        for msg in state['messages']:
+            if hasattr(msg, 'content') and msg.content:
+                user_query = msg.content
+                break
+    
+    # Normalizar
+    user_query = str(user_query).lower().strip() if user_query else ''
+    
+    logger.info(f"user_query extracted: '{user_query}'")
+    
+    if not user_query:
+        logger.error(f"user_query is empty! State: {list(state.keys())}, messages: {len(state.get('messages', []))}")
+        # Fallback: intentar obtener del estado original
+        user_query = str(state.get('user_query', '')).strip().lower()
 
     try:
-        user_query = state['user_query'].lower()
-
-        # Detección por keywords (fast path)
-        # Mejorar detección para queries SQL comunes
-        sql_keywords = ['producto', 'productos', 'ventas', 'venta', 'cuántas', 'cuantos', 'cuántos', 
-                       'cuanto', 'cuánto', 'muestra', 'muéstrame', 'lista', 'listar', 'hay', 
-                       'existen', 'existe', 'total', 'suma', 'promedio', 'máximo', 'mínimo',
-                       'correctivas', 'preventivas', 'orden', 'ordenes', 'cliente', 'clientes']
         
-        if any(word in user_query for word in ['gráfica', 'grafica', 'chart', 'plot', 'visualiza']):
+        # PRIORIDAD 1: Detectar saludos y preguntas generales PRIMERO
+        # Estas deben tener la máxima prioridad para evitar clasificación incorrecta
+        general_keywords = [
+            'hola', 'hi', 'hello', 'buenos días', 'buenas tardes', 'buenas noches',
+            'ayuda', 'help', 'qué puedes', 'que puedes', 'qué puedes hacer', 'que puedes hacer',
+            'qué es', 'que es', 'explícame', 'explicame', 'cómo funciona', 'como funciona',
+            'gracias', 'thanks', 'thank you', 'adios', 'adiós', 'bye', 'hasta luego',
+            'qué haces', 'que haces', 'para qué sirves', 'para que sirves'
+        ]
+        
+        # PRIORIDAD 2: Detectar visualizaciones
+        viz_keywords = ['gráfica', 'grafica', 'chart', 'plot', 'visualiza', 'visualización', 
+                       'visualizacion', 'gráfico', 'grafico', 'diagrama', 'mostrar gráfica']
+        
+        # PRIORIDAD 3: Detectar KPIs (incluye palabras de negocio que son KPIs)
+        kpi_keywords = [
+            'kpi', 'métrica', 'metrica', 'revenue', 'ticket promedio', 
+            'indicador', 'indicadores clave', 'ingresos', 'promedio',
+            'ratio', 'porcentaje', 'estadística', 'estadisticas', 'estadísticas'
+        ]
+        
+        # Detectar si se pide graficar KPIs específicos (debe ser hybrid)
+        kpi_business_terms = ['revenue', 'ingresos', 'ticket', 'promedio', 'ratio', 'ventas totales']
+        wants_kpi_chart = any(word in user_query for word in viz_keywords) and any(word in user_query for word in kpi_business_terms)
+        
+        # PRIORIDAD 4: Detectar queries SQL (solo si hay palabras específicas de datos)
+        # Estas palabras SOLO deben activar SQL si están en contexto de datos
+        sql_keywords = [
+            # Palabras de cantidad
+            'cuántas', 'cuantos', 'cuántos', 'cuanto', 'cuánto', 'cuantas', 'cuantas',
+            # Palabras de datos/entidades
+            'producto', 'productos', 'ventas', 'venta', 'ventas', 'correctivas', 'preventivas',
+            'orden', 'ordenes', 'órdenes', 'compra', 'compras', 'cliente', 'clientes',
+            # Palabras de acción
+            'muestra', 'muéstrame', 'lista', 'listar', 'mostrar', 'dame', 'dame',
+            # Palabras de existencia
+            'hay', 'existen', 'existe', 'tiene', 'tienen',
+            # Palabras de agregación
+            'total', 'suma', 'promedio', 'máximo', 'mínimo', 'contar', 'count',
+            # Palabras genéricas de datos
+            'datos', 'registros', 'filas', 'tabla', 'tablas'
+        ]
+        
+        # PRIORIDAD: Las intenciones específicas (viz, kpi, sql) tienen prioridad sobre general
+        # Solo clasificar como "general" si NO hay indicadores de intenciones específicas
+        
+        logger.info(f"Analyzing query: '{user_query}'")
+        
+        # Detectar todas las keywords encontradas
+        viz_matches = [word for word in viz_keywords if word in user_query]
+        kpi_matches = [word for word in kpi_keywords if word in user_query]
+        sql_matches = [word for word in sql_keywords if word in user_query]
+        general_matches = [word for word in general_keywords if word in user_query]
+        
+        logger.info(f"Keyword matches - viz: {viz_matches}, kpi: {kpi_matches}, sql: {sql_matches}, general: {general_matches}")
+        
+        # 0. Verificar si se pide graficar KPIs (debe ser hybrid)
+        # Si hay palabras de visualización Y palabras de KPI/negocio, es hybrid
+        kpi_business_terms = ['revenue', 'ingresos', 'ticket', 'promedio', 'ratio', 'ventas totales', 'kpi', 'métrica']
+        has_viz = bool(viz_matches)
+        has_kpi_term = any(word in user_query for word in kpi_business_terms)
+        
+        if has_viz and has_kpi_term:
+            intent = 'hybrid'
+            logger.info(f"Hybrid detection (KPI chart): {intent} (viz: {viz_matches}, kpi terms: {has_kpi_term})")
+        # 1. Verificar visualizaciones PRIMERO (tiene máxima prioridad para queries de datos)
+        elif viz_matches:
             intent = 'viz'
-            logger.info(f"Keyword detection: {intent}")
-        elif any(word in user_query for word in ['kpi', 'métrica', 'metrica', 'revenue', 'ticket promedio']):
+            logger.info(f"Viz keyword detection: {intent} (matched: {viz_matches})")
+        # 2. Verificar KPIs
+        elif kpi_matches or has_kpi_term:
             intent = 'kpi'
-            logger.info(f"Keyword detection: {intent}")
-        elif any(word in user_query for word in ['hola', 'ayuda', 'qué puedes', 'que puedes', 'help']):
-            intent = 'general'
-            logger.info(f"Keyword detection: {intent}")
-        elif any(word in user_query for word in sql_keywords):
-            # Si tiene keywords SQL, ir directo a SQL sin usar LLM
+            logger.info(f"KPI keyword detection: {intent} (matched: {kpi_matches or 'business terms'})")
+        # 3. Verificar SQL (queries de datos) - PRIORIDAD sobre general
+        elif sql_matches:
+            # Si tiene palabras de datos, es SQL aunque tenga palabras generales
             intent = 'sql'
-            logger.info(f"SQL keyword detection: {intent}")
+            logger.info(f"SQL keyword detection: {intent} (matched: {sql_matches})")
+        # 4. Verificar si es un saludo o pregunta general (solo si no hay intenciones específicas)
+        elif general_matches:
+            intent = 'general'
+            logger.info(f"General keyword detection: {intent} (matched: {general_matches})")
         else:
             # Usar LLM para clasificar (solo si no detectamos keywords)
             logger.info("No keywords detected, using LLM for classification")
@@ -194,19 +275,26 @@ def router_node(state: AgentState) -> AgentState:
 
             formatted_prompt = prompt.format(user_query=state['user_query'])
 
-            intent = invoke_llm_with_retry(
+            llm_intent = invoke_llm_with_retry(
                 llm,
                 [{"role": "user", "content": formatted_prompt}]
             )
 
-            intent = intent.strip().lower()
-            logger.info(f"LLM classification: {intent}")
+            llm_intent = llm_intent.strip().lower()
+            logger.info(f"LLM classification: {llm_intent}")
+            
+            # Validar que el LLM no sobreescriba con "general" si hay indicadores de datos
+            if llm_intent == 'general' and (sql_matches or kpi_matches or viz_matches):
+                logger.warning(f"LLM classified as 'general' but found data keywords, overriding to 'sql'")
+                intent = 'sql'
+            else:
+                intent = llm_intent
 
         # Validar intent
         valid_intents = ['sql', 'kpi', 'viz', 'general', 'hybrid']
         if intent not in valid_intents:
-            logger.warning(f"Invalid intent '{intent}', defaulting to 'sql'")
-            intent = 'sql'  # Default a SQL si hay duda
+            logger.warning(f"Invalid intent '{intent}', defaulting to 'general'")
+            intent = 'general'  # Default a general si hay duda (más seguro que SQL)
 
         logger.info(f"✓ Final intent: {intent}")
 
@@ -525,6 +613,29 @@ def kpi_node(state: AgentState) -> AgentState:
             [{"role": "user", "content": formatted_prompt}]
         )
 
+        # Verificar si el usuario pidió una gráfica de KPIs
+        user_query_lower = state['user_query'].lower()
+        wants_chart = any(word in user_query_lower for word in ['gráfica', 'grafica', 'chart', 'plot', 'visualiza', 'gráfico', 'grafico'])
+        
+        # Si pidió gráfica y tenemos KPIs, preparar datos para visualización
+        if wants_chart and calculated_kpis:
+            logger.info("User requested chart for KPIs, preparing visualization data")
+            # Convertir KPIs a formato de datos para graficar
+            kpi_chart_data = []
+            for kpi_key, kpi_info in calculated_kpis.items():
+                # Solo incluir KPIs con valores numéricos simples
+                if isinstance(kpi_info.get('value'), (int, float)):
+                    kpi_chart_data.append({
+                        'kpi': kpi_info['name'],
+                        'valor': kpi_info['value'],
+                        'formatted': kpi_info.get('formatted_value', str(kpi_info['value']))
+                    })
+            
+            if kpi_chart_data:
+                # Guardar datos para que el nodo VIZ los use
+                state['sql_results'] = kpi_chart_data
+                logger.info(f"Prepared {len(kpi_chart_data)} KPIs for chart visualization")
+        
         # Actualizar estado
         state['kpis'] = calculated_kpis
         state['intermediate_steps'].append({
@@ -551,10 +662,35 @@ def kpi_node(state: AgentState) -> AgentState:
 def viz_node(state: AgentState) -> AgentState:
     """
     Genera visualizaciones usando sistema híbrido.
+    Puede graficar:
+    - Datos SQL (sql_results)
+    - KPIs estadísticos (kpis)
+    - Combinación de ambos
     """
     logger.info("=== Viz Node (Hybrid) ===")
 
     try:
+        # Verificar si hay KPIs para graficar
+        kpis = state.get('kpis', {})
+        has_kpis = bool(kpis)
+        
+        # Si no hay datos SQL pero hay KPIs, crear datos para graficar KPIs
+        if not state.get('sql_results') and has_kpis:
+            logger.info("No SQL data but KPIs available, creating KPI chart data")
+            # Convertir KPIs a formato de datos para graficar
+            kpi_data = []
+            for kpi_key, kpi_info in kpis.items():
+                if isinstance(kpi_info.get('value'), (int, float)):
+                    kpi_data.append({
+                        'kpi': kpi_info['name'],
+                        'valor': kpi_info['value'],
+                        'formatted': kpi_info.get('formatted_value', str(kpi_info['value']))
+                    })
+            
+            if kpi_data:
+                state['sql_results'] = kpi_data
+                logger.info(f"Created {len(kpi_data)} KPI data points for visualization")
+        
         # Si no hay datos, ejecutar SQL primero
         if not state.get('sql_results'):
             logger.info("No data available, executing SQL first")
@@ -651,23 +787,33 @@ from ..feedback.feedback_service import feedback_service
 import time
 
 
-def track_interaction_node(state: State) -> State:
+def track_interaction_node(state: AgentState) -> AgentState:
     """
     Nodo para rastrear la interacción y guardar métricas
     Se ejecuta al final del workflow
     """
-    start_time = time.time()
-
+    logger.info("=== Track Interaction Node ===")
+    
     try:
         # Calcular tiempo de respuesta
-        response_time_ms = int((time.time() - state.get('start_time', start_time)) * 1000)
+        start_time = state.get('start_time')
+        if start_time:
+            response_time_ms = int((time.time() - start_time) * 1000)
+        else:
+            logger.warning("start_time not found in state, using 0")
+            response_time_ms = 0
+
+        session_id = state.get('session_id', 'unknown')
+        user_query = state.get('user_query', '')
+        
+        logger.info(f"Tracking interaction: session_id={session_id}, query_length={len(user_query)}, response_time={response_time_ms}ms")
 
         # Guardar interacción
         feedback_id = feedback_service.save_interaction(
-            session_id=state.get('session_id', 'unknown'),
-            user_query=state['user_query'],
+            session_id=session_id,
+            user_query=user_query,
             sql_generated=state.get('sql_query'),
-            chart_type=state.get('chart_config', {}).get('type'),
+            chart_type=state.get('chart_config', {}).get('type') if state.get('chart_config') else None,
             chart_config=state.get('chart_config'),
             response_time_ms=response_time_ms,
             error_occurred=bool(state.get('error')),
@@ -676,9 +822,12 @@ def track_interaction_node(state: State) -> State:
 
         # Agregar feedback_id al state para el frontend
         state['feedback_id'] = feedback_id
+        logger.info(f"✅ Feedback saved with ID: {feedback_id}")
 
     except Exception as e:
-        logger.error(f"Error guardando feedback: {e}")
-        # No fallar el workflow por error de tracking
+        logger.error(f"❌ Error guardando feedback: {e}", exc_info=True)
+        # No fallar el workflow por error de tracking, pero registrar el error
+        state['feedback_id'] = None
+        state['error'] = state.get('error') or f"Error tracking interaction: {str(e)}"
 
     return state

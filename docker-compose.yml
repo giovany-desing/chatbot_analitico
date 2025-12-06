@@ -52,6 +52,13 @@ services:
     networks:
       - chatbot_network
 
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=5)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
     # En macOS, Docker Desktop puede tener problemas accediendo a servicios externos
     # Si RDS no es accesible, verifica:
     # 1. RDS tiene "Publicly accessible" = Yes
@@ -68,8 +75,11 @@ services:
     container_name: chatbot_frontend
     ports:
       - "8501:8501"
+    environment:
+      - API_URL=http://app:8000
     depends_on:
-      - app
+      app:
+        condition: service_healthy
     networks:
       - chatbot_network
     restart: unless-stopped

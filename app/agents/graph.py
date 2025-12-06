@@ -94,17 +94,12 @@ def create_chatbot_graph():
     workflow.add_edge("general", "format_results")
     workflow.add_edge("hybrid", "format_results")
     
-        
-    # Conectar todos los nodos finales al tracking
-    workflow.add_edge("sql", "track")
-    workflow.add_edge("hybrid", "track")
-    workflow.add_edge("format_results", "track")
-    
+    # Agregar nodo de tracking
     workflow.add_node("track", track_interaction_node)
-
-    # format_results va a END
-    workflow.add_edge("format_results", END)
-    workflow.set_finish_point("track")
+    
+    # format_results va a track, y track va a END
+    workflow.add_edge("format_results", "track")
+    workflow.add_edge("track", END)
 
     # Compilar
     app = workflow.compile()

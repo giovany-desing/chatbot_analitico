@@ -208,22 +208,31 @@ def get_router_prompt() -> ChatPromptTemplate:
 
 Tu tarea es clasificar la pregunta del usuario en UNA de estas categorías:
 
-1. **sql**: El usuario pide datos específicos de la base de datos
-   Ejemplos: "¿Cuántas ventas hubo en enero?", "Muéstrame los productos más vendidos"
+1. **viz**: El usuario pide una visualización o gráfica (MÁXIMA PRIORIDAD si menciona gráficas)
+   Ejemplos: "Muéstrame una gráfica de ventas", "Grafícame los productos", "Visualiza las ventas"
+   REGLA: Si menciona "gráfica", "chart", "visualiza", "plot", clasifica como "viz"
 
-2. **kpi**: El usuario pide calcular métricas o KPIs
-   Ejemplos: "¿Cuál es el revenue total?", "Calcula el ticket promedio"
+2. **sql**: El usuario pide datos específicos de la base de datos
+   Ejemplos: "¿Cuántas ventas hubo en enero?", "Muéstrame los productos más vendidos", "Lista las ventas"
+   REGLA: Si menciona datos específicos (ventas, productos, clientes, etc.), clasifica como "sql"
 
-3. **viz**: El usuario pide una visualización o gráfica
-   Ejemplos: "Muéstrame una gráfica de ventas", "Grafícame los productos"
+3. **kpi**: El usuario pide calcular métricas o KPIs
+   Ejemplos: "¿Cuál es el revenue total?", "Calcula el ticket promedio", "Métricas de ventas"
 
-4. **general**: Pregunta general sin necesidad de datos
-   Ejemplos: "¿Qué puedes hacer?", "Hola", "Explícame qué es un KPI"
-
-5. **hybrid**: Necesita combinar SQL + KPIs + Visualización
+4. **hybrid**: Necesita combinar SQL + KPIs + Visualización
    Ejemplos: "Dame las ventas del último mes y grafícalas", "Calcula el revenue y muéstralo en gráfica"
 
+5. **general**: Preguntas generales, saludos, o consultas sin necesidad de datos (SOLO si no hay intenciones específicas)
+   Ejemplos: "Hola", "¿Qué puedes hacer?", "Ayuda", "Explícame qué es un KPI", "Gracias", "Adiós"
+   REGLA: SOLO clasifica como "general" si NO menciona datos, gráficas, KPIs o métricas
+
 Pregunta del usuario: {user_query}
+
+IMPORTANTE - ORDEN DE PRIORIDAD:
+1. Si menciona "gráfica", "chart", "visualiza" → "viz"
+2. Si menciona datos específicos (ventas, productos, etc.) → "sql"  
+3. Si menciona métricas/KPIs → "kpi"
+4. Si es solo un saludo sin datos → "general"
 
 Responde ÚNICAMENTE con una palabra: sql, kpi, viz, general, o hybrid
 No des explicaciones, solo la categoría."""
@@ -244,20 +253,28 @@ def get_sql_prompt() -> ChatPromptTemplate:
 
 {schema_info}
 
-**EJEMPLOS DE QUERIES:**
+**EJEMPLOS DE QUERIES SIMPLES:**
+
+- Para contar registros: SELECT COUNT(*) FROM tabla;
+- Para contar valores únicos: SELECT COUNT(DISTINCT columna) FROM tabla;
+- Para contar con condición: SELECT COUNT(*) FROM tabla WHERE condición;
+
+**EJEMPLOS DE QUERIES DEL RAG (solo como referencia, prioriza simplicidad):**
 
 {examples}
 
 **REGLAS IMPORTANTES:**
 
-1. Genera SOLO la query SQL, sin explicaciones
-2. Usa sintaxis MySQL 8.0
-3. NO uses DELETE, UPDATE, DROP, ALTER, CREATE
-4. Usa ONLY SELECT queries
-5. Parametriza fechas en formato 'YYYY-MM-DD'
-6. Usa JOINs cuando sea necesario
-7. Agrega LIMIT 100 si no especifican límite
-8. Comenta queries complejas con -- comentarios
+1. **PRIORIZA QUERIES SIMPLES**: Si la pregunta es simple (contar, sumar, promediar), usa queries simples sin JOINs innecesarios
+2. Genera SOLO la query SQL, sin explicaciones
+3. Usa sintaxis MySQL 8.0
+4. NO uses DELETE, UPDATE, DROP, ALTER, CREATE
+5. Usa ONLY SELECT queries
+6. Para preguntas de "¿Cuántas X hay?" usa: SELECT COUNT(*) o SELECT COUNT(DISTINCT columna)
+7. NO uses JOINs a menos que sea absolutamente necesario combinar datos de múltiples tablas
+8. Parametriza fechas en formato 'YYYY-MM-DD' solo si se mencionan fechas específicas
+9. Agrega LIMIT 100 solo si se piden listas de registros (no para COUNT, SUM, AVG)
+10. Comenta queries complejas con -- comentarios
 
 **PREGUNTA DEL USUARIO:**
 
