@@ -86,6 +86,10 @@ class Settings(BaseSettings):
         default="",
         description="URL del modelo fine-tuned en Modal.com"
     )
+    USAR_FINETUNED_MODEL: bool = Field(
+        default=True,
+        description="Activar uso del modelo fine-tuned en sistema híbrido"
+    )
     
 
 

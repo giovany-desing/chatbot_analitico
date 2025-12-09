@@ -38,6 +38,10 @@ services:
       - DEBUG=${DEBUG}
       - LOG_LEVEL=${LOG_LEVEL}
 
+      # Fine-tuned Model
+      - FINETUNED_MODEL_ENDPOINT=${FINETUNED_MODEL_ENDPOINT}
+      - USAR_FINETUNED_MODEL=${USAR_FINETUNED_MODEL}
+
     depends_on:
       redis:
         condition: service_healthy

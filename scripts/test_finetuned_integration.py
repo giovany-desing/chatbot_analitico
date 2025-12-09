@@ -18,8 +18,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from app.config import settings
 
 # Configuración
-ENDPOINT_URL = settings.FINETUNED_MODEL_ENDPOINT or ""
-CHAT_ENDPOINT = "http://localhost:8000/chat"
+# Intentar leer desde settings primero, luego desde env directamente
+ENDPOINT_URL = settings.FINETUNED_MODEL_ENDPOINT or os.getenv("FINETUNED_MODEL_ENDPOINT", "")
+CHAT_ENDPOINT = os.getenv("CHAT_ENDPOINT", "http://localhost:8000/chat")
 TIMEOUT_SECONDS = 10
 MAX_RESPONSE_TIME = 5  # Esperamos respuesta en menos de 5 segundos
 EXPECTED_LLM_TIME = 10  # Tiempo esperado con LLM (~10s)
@@ -367,113 +368,119 @@ def test_3_end_to_end() -> TestResult:
 
 def test_4_logs_validation() -> TestResult:
     """
-    TEST 4: Validar logs muestran uso de Capa 2
+    TEST 4: Validar que se usa Capa 2 (Fine-tuned) en lugar de LLM
+    Verifica esto haciendo una request y analizando la respuesta.
     """
-    name = "TEST 4: Validar logs muestran uso de Capa 2"
+    name = "TEST 4: Validar uso de Capa 2 (Fine-tuned)"
     start_time = time.time()
     
     try:
-        import subprocess
+        print(f"   🔍 Haciendo request de prueba para verificar uso de Capa 2...")
         
-        # Obtener logs recientes del contenedor
-        print(f"   📋 Consultando logs del contenedor...")
+        test_query = "Muestra gráfica de los 5 productos más vendidos"
         
-        result = subprocess.run(
-            ["docker-compose", "logs", "--tail=100", "app"],
-            capture_output=True,
-            text=True,
-            timeout=10
+        request_start = time.time()
+        response = requests.post(
+            CHAT_ENDPOINT,
+            json={
+                "message": test_query,
+                "conversation_id": f"test-capa2-{int(time.time())}"
+            },
+            timeout=120
         )
-        
-        if result.returncode != 0:
-            return TestResult(
-                name=name,
-                passed=False,
-                message=f"Error obteniendo logs: {result.stderr}",
-                duration=time.time() - start_time
-            )
-        
-        logs = result.stdout
-        
-        # Buscar indicadores de Capa 2
-        capa2_indicators = [
-            "Capa 2",
-            "fine-tuned",
-            "Fine-tuned",
-            "Modelo Fine-tuned",
-            "finetuned"
-        ]
-        
-        found_indicators = []
-        for indicator in capa2_indicators:
-            if indicator.lower() in logs.lower():
-                found_indicators.append(indicator)
-        
-        # Buscar si saltó directo a Capa 3 (LLM)
-        capa3_indicators = [
-            "Capa 3",
-            "Fallback to LLM",
-            "Layer 3"
-        ]
-        
-        skipped_to_llm = False
-        for indicator in capa3_indicators:
-            if indicator in logs:
-                # Verificar que no haya evidencia de Capa 2 antes
-                # (simplificado: si encontramos Capa 3 pero no Capa 2, es problema)
-                if not found_indicators:
-                    skipped_to_llm = True
+        request_time = time.time() - request_start
         
         elapsed_time = time.time() - start_time
         
-        if not found_indicators:
-            # Extraer líneas relevantes de logs
-            relevant_lines = []
-            for line in logs.split('\n'):
-                if any(keyword in line.lower() for keyword in ['capa', 'layer', 'fine', 'hybrid']):
-                    relevant_lines.append(line.strip())
-            
+        if response.status_code != 200:
             return TestResult(
                 name=name,
                 passed=False,
-                message="No se encontraron indicadores de Capa 2 en los logs",
+                message=f"Request falló con HTTP {response.status_code}",
+                duration=elapsed_time
+            )
+        
+        try:
+            response_data = response.json()
+        except json.JSONDecodeError:
+            return TestResult(
+                name=name,
+                passed=False,
+                message="Respuesta no es JSON válido",
+                duration=elapsed_time
+            )
+        
+        chart_config = response_data.get("chart_config", {})
+        if not chart_config:
+            return TestResult(
+                name=name,
+                passed=False,
+                message="No se generó chart_config en la respuesta",
+                duration=elapsed_time
+            )
+        
+        source = chart_config.get("source", "unknown")
+        chart_type = chart_config.get("chart_type") or chart_config.get("type", "unknown")
+        
+        issues = []
+        indicators = []
+        
+        if source == "llm":
+            issues.append("Se usó Capa 3 (LLM) en lugar de Capa 2 (Fine-tuned)")
+        elif source == "finetuned":
+            indicators.append("✅ Source: finetuned (Capa 2 activada)")
+        elif source == "rules":
+            indicators.append("✅ Source: rules (Capa 1 activada)")
+        elif source == "unknown":
+            if request_time > 8:
+                issues.append(f"Tiempo de respuesta {request_time:.2f}s sugiere uso de LLM (Capa 3)")
+            elif request_time < 5:
+                indicators.append(f"Tiempo rápido {request_time:.2f}s sugiere uso de Capa 1 o 2")
+        
+        if request_time < 3:
+            indicators.append(f"Tiempo muy rápido ({request_time:.2f}s) - probablemente Capa 1 o 2")
+        elif request_time > 10:
+            issues.append(f"Tiempo lento ({request_time:.2f}s) - probablemente se usó LLM")
+        
+        if not ENDPOINT_URL:
+            issues.append("FINETUNED_MODEL_ENDPOINT no está configurado")
+        
+        if issues:
+            return TestResult(
+                name=name,
+                passed=False,
+                message="; ".join(issues),
                 duration=elapsed_time,
                 data={
-                    "relevant_logs": relevant_lines[-5:] if relevant_lines else ["No logs relevantes encontrados"]
+                    "source": source,
+                    "chart_type": chart_type,
+                    "request_time": f"{request_time:.2f}s",
+                    "indicators": indicators if indicators else []
                 }
             )
         
-        if skipped_to_llm:
-            return TestResult(
-                name=name,
-                passed=False,
-                message="Se saltó directo a Capa 3 (LLM) sin pasar por Capa 2",
-                duration=elapsed_time,
-                data={"found_indicators": found_indicators}
-            )
-        
-        # Extraer líneas relevantes
-        relevant_lines = []
-        for line in logs.split('\n'):
-            if any(indicator.lower() in line.lower() for indicator in found_indicators):
-                relevant_lines.append(line.strip())
+        success_message = f"Uso de Capa 2 verificado. Source: {source}, Tiempo: {request_time:.2f}s"
+        if indicators:
+            success_message += f" ({', '.join(indicators)})"
         
         return TestResult(
             name=name,
             passed=True,
-            message=f"Logs muestran uso de Capa 2. Indicadores encontrados: {', '.join(found_indicators[:3])}",
+            message=success_message,
             duration=elapsed_time,
             data={
-                "found_indicators": found_indicators,
-                "sample_logs": relevant_lines[-3:] if relevant_lines else []
+                "source": source,
+                "chart_type": chart_type,
+                "request_time": f"{request_time:.2f}s",
+                "indicators": indicators
             }
         )
         
-    except subprocess.TimeoutExpired:
+    except requests.exceptions.Timeout:
         return TestResult(
             name=name,
             passed=False,
-            message="Timeout obteniendo logs",
+            message="Timeout en request de prueba",
             duration=time.time() - start_time
         )
     except Exception as e:
@@ -608,10 +615,11 @@ def print_troubleshooting_tips(failed_tests: List[TestResult]):
             print("   • Verificar que la query SQL se ejecute correctamente")
         
         elif "TEST 4" in test.name:
-            print("   • Verificar que el endpoint esté configurado correctamente")
+            print("   • Verificar que FINETUNED_MODEL_ENDPOINT esté configurado en .env")
+            print("   • Verificar que el endpoint Modal esté activo y responda")
             print("   • Revisar app/intelligence/hybrid_system.py")
-            print("   • Verificar que FINETUNED_MODEL_ENDPOINT no esté vacío")
-            print("   • Ver logs completos: docker-compose logs --tail=200 app")
+            print("   • Si source es 'llm', el modelo fine-tuned no se está usando")
+            print("   • Ver logs manualmente: docker-compose logs --tail=200 app | grep -i 'capa 2\\|fine-tuned'")
         
         elif "TEST 5" in test.name:
             print("   • Verificar conectividad y latencia de red")

@@ -46,6 +46,12 @@ from app.llm.models import (
 from app.tools.sql_tool import mysql_tool
 from app.db.connections import get_postgres
 from app.agents.sql_validator import validate_and_execute_sql, get_table_schema
+from app.validators import (
+    validate_user_query,
+    validate_sql_results,
+    validate_data_for_chart,
+    validate_rag_context
+)
 
 logger = logging.getLogger(__name__)
 
@@ -92,6 +98,23 @@ def hybrid_node(state: AgentState) -> AgentState:
             logger.info("Step 3: Generating visualization")
             logger.info(f"   SQL Query: {state.get('sql_query', 'N/A')}")
             logger.info(f"   Results: {len(state.get('sql_results', []))} rows")
+            
+            # VALIDACIÓN ESPECÍFICA PARA DATOS HÍBRIDOS
+            # Verificar que tenemos tanto SQL results como KPIs para visualización híbrida
+            sql_results = state.get('sql_results', [])
+            kpis = state.get('kpis', {})
+            
+            if sql_results and kpis:
+                logger.info("✅ Hybrid data validation: Both SQL results and KPIs available")
+                # Validar que los datos SQL sean compatibles con visualización
+                # (la validación específica de chart se hace en viz_node)
+                if not sql_results:
+                    logger.warning("⚠️ Hybrid data validation: SQL results empty")
+                    state['error'] = "No hay datos SQL para visualizar en modo híbrido"
+                    return state
+            elif not sql_results:
+                logger.warning("⚠️ Hybrid data validation: No SQL results available")
+            
             state = viz_node(state)
 
         # 4. Generar resumen combinado
@@ -409,6 +432,15 @@ def sql_node(state: AgentState) -> AgentState:
     logger.info("=== SQL Node (with RAG + Self-Correction) ===")
 
     try:
+        # VALIDACIÓN 1: Validar user_query ANTES de generar SQL
+        try:
+            validate_user_query(state['user_query'])
+            logger.info("✅ User query validation passed")
+        except ValueError as e:
+            logger.error(f"❌ User query validation failed: {e}")
+            state['error'] = f"Query inválida: {e}. Por favor, reformula tu pregunta."
+            return state
+        
         llm = get_llama_model()
         sql_prompt = get_sql_prompt()
         correction_prompt = get_sql_correction_prompt()
@@ -419,11 +451,35 @@ def sql_node(state: AgentState) -> AgentState:
 
         # **Usar RAG para obtener ejemplos relevantes (con timeout)**
         try:
-            relevant_examples = vectorstore.get_relevant_examples(
-                  state['user_query'],
-                  top_k=3
-            )
-            logger.info("Retrieved relevant examples from RAG")
+            # Obtener ejemplos usando search_similar para tener acceso a la lista completa
+            rag_examples_list = []
+            try:
+                rag_examples_list = vectorstore.search_similar(
+                    state['user_query'],
+                    top_k=3
+                )
+                logger.info(f"Retrieved {len(rag_examples_list)} relevant examples from RAG")
+                
+                # VALIDACIÓN 2: Validar contexto RAG DESPUÉS de obtener ejemplos
+                if rag_examples_list:
+                    try:
+                        validate_rag_context(rag_examples_list)
+                        logger.info("✅ RAG context validation passed")
+                    except ValueError as e:
+                        logger.warning(f"⚠️ RAG context validation warning: {e}. Continuing anyway.")
+                
+                # Formatear ejemplos para el prompt
+                relevant_examples = vectorstore.get_relevant_examples(
+                    state['user_query'],
+                    top_k=3
+                )
+            except Exception as e:
+                logger.warning(f"RAG search_similar failed: {e}. Trying get_relevant_examples...")
+                relevant_examples = vectorstore.get_relevant_examples(
+                    state['user_query'],
+                    top_k=3
+                )
+                logger.info("Retrieved relevant examples from RAG (formatted)")
         except Exception as e:
             logger.warning(f"RAG search failed or timed out: {e}. Continuing without examples.")
             relevant_examples = "No hay ejemplos similares disponibles."
@@ -502,6 +558,21 @@ def sql_node(state: AgentState) -> AgentState:
                 if success:
                     results = result
                     logger.info(f"✅ SQL executed successfully on attempt {attempt + 1}: {len(results)} rows returned")
+                    
+                    # VALIDACIÓN 3: Validar resultados SQL DESPUÉS de ejecutar
+                    validation_result = validate_sql_results(results)
+                    
+                    if not validation_result.is_valid:
+                        logger.error(f"❌ SQL results validation failed: {validation_result.error_msg}")
+                        state['error'] = f"Los resultados de la query no son válidos: {validation_result.error_msg}"
+                        state['sql_query'] = sql_query
+                        state['sql_results'] = None
+                        return state
+                    
+                    if validation_result.warnings:
+                        logger.warning(f"⚠️ SQL results validation warnings: {validation_result.warnings}")
+                        # Agregar warnings al estado para referencia
+                        state['sql_validation_warnings'] = validation_result.warnings
                     
                     if attempt > 0:
                         logger.info(f"🎉 Self-correction successful after {attempt} correction attempt(s)")
@@ -875,6 +946,10 @@ def viz_node(state: AgentState) -> AgentState:
         if not results:
             raise ValueError("No data available for visualization")
 
+        # VALIDACIÓN: Validar datos ANTES de crear gráfica
+        # Primero necesitamos saber qué tipo de gráfica se va a usar
+        # Por ahora validamos con el tipo que decide el sistema híbrido
+        
         # USAR SISTEMA HÍBRIDO
         logger.info("Using HybridVizSystem for chart decision")
         sql_query = state.get('sql_query', '')
@@ -883,6 +958,42 @@ def viz_node(state: AgentState) -> AgentState:
             sql_results=results,
             sql_query=sql_query
         )
+        
+        chart_type = chart_config.get('chart_type', 'bar')
+        
+        # Validar datos para el tipo de gráfica decidido
+        validation_result = validate_data_for_chart(results, chart_type)
+        
+        if not validation_result.is_valid:
+            logger.error(f"❌ Data validation failed for chart type '{chart_type}': {validation_result.error_msg}")
+            
+            # Intentar sugerir un tipo de gráfica alternativo
+            alternative_charts = {
+                'bar': 'line',
+                'line': 'bar',
+                'pie': 'bar',
+                'scatter': 'bar'
+            }
+            
+            alternative = alternative_charts.get(chart_type, 'bar')
+            logger.info(f"🔄 Trying alternative chart type: {alternative}")
+            
+            # Validar con tipo alternativo
+            alt_validation = validate_data_for_chart(results, alternative)
+            
+            if alt_validation.is_valid:
+                logger.info(f"✅ Alternative chart type '{alternative}' is valid")
+                chart_config['chart_type'] = alternative
+                chart_config['reasoning'] = f"Tipo de gráfica cambiado a {alternative} debido a: {validation_result.error_msg}"
+            else:
+                # Si el alternativo tampoco funciona, retornar error
+                state['error'] = f"No se pueden generar gráficas con estos datos: {validation_result.error_msg}"
+                return state
+        
+        if validation_result.warnings:
+            logger.warning(f"⚠️ Data validation warnings: {validation_result.warnings}")
+            # Agregar warnings al chart_config
+            chart_config['validation_warnings'] = validation_result.warnings
         logger.info("Generating professional chart")
         chart_result = professional_viz_tool.create_chart(
             data=results,
