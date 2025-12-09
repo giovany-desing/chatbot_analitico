@@ -30,6 +30,8 @@ from typing import Dict, Any
 from langchain_core.messages import HumanMessage, AIMessage
 import logging
 import json
+import time
+import uuid
 
 from app.agents.state import AgentState
 from app.llm.models import (
@@ -52,6 +54,12 @@ from app.validators.data_validator import (
     validate_data_for_chart,
     validate_rag_context,
     ValidationResult
+)
+from app.metrics.performance_tracker import (
+    track_router_decision,
+    track_sql_execution,
+    track_viz_generation,
+    track_hybrid_execution
 )
 
 logger = logging.getLogger(__name__)
@@ -118,7 +126,15 @@ def hybrid_node(state: AgentState) -> AgentState:
     Returns:
         Estado con todos los resultados combinados
     """
+    start_time = time.time()
     logger.info("=== Hybrid Node ===")
+
+    # Variables para tracking
+    query = state.get('user_query', '')
+    success = False
+    error_message = None
+    sql_latency = None
+    viz_latency = None
 
     try:
         # 1. Ejecutar SQL
@@ -209,13 +225,32 @@ Genera un resumen ejecutivo de 2-3 párrafos explicando los hallazgos principale
         })
 
         logger.info("✓ Hybrid node completed successfully")
+        success = True
 
         return state
 
     except Exception as e:
         logger.error(f"Error in hybrid_node: {e}")
-        state['error'] = str(e)
+        success = False
+        error_message = str(e)
+        state['error'] = error_message
         return state
+    
+    finally:
+        # Tracking al final (siempre se ejecuta)
+        try:
+            latency_ms = int((time.time() - start_time) * 1000)
+            track_hybrid_execution(
+                query=query,
+                success=success,
+                latency_ms=latency_ms,
+                session_id=state.get('session_id'),
+                sql_latency=sql_latency,
+                viz_latency=viz_latency,
+                error_message=error_message
+            )
+        except Exception as e:
+            logger.debug(f"Error tracking hybrid execution: {e}")
 
 
 
@@ -284,10 +319,18 @@ def router_node(state: AgentState) -> AgentState:
     Returns:
         Estado con 'intent' actualizado
     """
+    start_time = time.time()
     logger.info("=== Router Node (RAG + Few-Shot) ===")
     
+    # Variables para tracking
+    query = state.get('user_query') or ''
+    intent = 'unknown'
+    confidence = 0.0
+    rag_similarity_avg = 0.0
+    error_msg = None
+    
     # Obtener user_query del estado - puede estar en diferentes lugares
-    user_query = state.get('user_query') or ''
+    user_query = query
     
     # Si está vacío, intentar obtenerlo de los mensajes
     if not user_query and state.get('messages'):
@@ -324,14 +367,32 @@ def router_node(state: AgentState) -> AgentState:
         # Si es claramente un saludo/general, clasificar directamente
         if general_matches:
             intent = 'general'
+            confidence = 1.0  # Máxima confianza para keywords
             logger.info(f"General keyword detection: {intent} (matched: {general_matches})")
             state['intent'] = intent
+            state['confidence'] = confidence
             state['intermediate_steps'].append({
                 'node': 'router',
                 'intent': intent,
                 'method': 'keyword',
                 'query': user_query_original
             })
+            
+            # Tracking
+            latency_ms = int((time.time() - start_time) * 1000)
+            try:
+                track_router_decision(
+                    query=user_query_original,
+                    intent=intent,
+                    confidence=confidence,
+                    rag_similarity=0.0,
+                    latency_ms=latency_ms,
+                    session_id=state.get('session_id'),
+                    error_message=None
+                )
+            except Exception as e:
+                logger.debug(f"Error tracking router decision: {e}")
+            
             return state
         
         # PRIORIDAD 2: Usar RAG + Few-Shot classification
@@ -354,6 +415,7 @@ def router_node(state: AgentState) -> AgentState:
             
             # Calcular similitud promedio (confianza)
             avg_similarity = sum(similarities) / len(similarities) if similarities else 0.0
+            rag_similarity_avg = avg_similarity
             logger.info(f"Average similarity: {avg_similarity:.3f}")
             
             # Votación mayoritaria
@@ -445,8 +507,17 @@ Basándote en estos ejemplos, clasifica la query del usuario."""
 
         logger.info(f"✓ Final intent: {intent}")
 
+        # Calcular confidence basado en similitud promedio
+        if rag_results and len(rag_results) > 0:
+            confidence = rag_similarity_avg
+        else:
+            # Si usó LLM sin RAG, confianza media
+            confidence = 0.5
+
         # Actualizar estado
         state['intent'] = intent
+        state['confidence'] = confidence
+        state['rag_similarity'] = rag_similarity_avg
         state['intermediate_steps'].append({
             'node': 'router',
             'intent': intent,
@@ -459,9 +530,28 @@ Basándote en estos ejemplos, clasifica la query del usuario."""
 
     except Exception as e:
         logger.error(f"Error in router_node: {e}", exc_info=True)
-        state['error'] = str(e)
+        error_msg = str(e)
+        state['error'] = error_msg
         state['intent'] = 'sql'  # Fallback seguro
+        intent = 'sql'
+        confidence = 0.0
         return state
+    
+    finally:
+        # Tracking al final (siempre se ejecuta)
+        try:
+            latency_ms = int((time.time() - start_time) * 1000)
+            track_router_decision(
+                query=user_query_original,
+                intent=intent,
+                confidence=confidence,
+                rag_similarity=rag_similarity_avg,
+                latency_ms=latency_ms,
+                session_id=state.get('session_id'),
+                error_message=error_msg
+            )
+        except Exception as e:
+            logger.debug(f"Error tracking router decision: {e}")
 
 
 # ============ SQL Node ============
@@ -476,7 +566,17 @@ def sql_node(state: AgentState) -> AgentState:
     - Máximo 2 reintentos de corrección
     - Logging detallado de cada intento
     """
+    start_time = time.time()
     logger.info("=== SQL Node (with RAG + Self-Correction) ===")
+
+    # Variables para tracking
+    query = state.get('user_query', '')
+    sql_query = ""
+    success = False
+    error_type = None
+    correction_attempts = 0
+    rows_returned = 0
+    error_message = None
 
     try:
         # VALIDACIÓN 1: Validar user_query ANTES de generar SQL
@@ -545,10 +645,10 @@ def sql_node(state: AgentState) -> AgentState:
 
         # Máximo de reintentos (incluyendo el intento inicial)
         max_retries = 2
-        sql_query = None
+        sql_query = ""
         results = None
         error_message = None
-        correction_attempts = []
+        correction_attempts_list = []
 
         for attempt in range(max_retries + 1):  # 0, 1, 2 (3 intentos totales)
             try:
@@ -603,8 +703,9 @@ def sql_node(state: AgentState) -> AgentState:
                         corrected_sql = corrected_sql.split('```')[1].split('```')[0].strip()
                     
                     sql_query = corrected_sql
+                    correction_attempts = attempt  # Número de intentos de corrección
                     logger.info(f"Corrected SQL (attempt {attempt + 1}): {sql_query}")
-                    correction_attempts.append({
+                    correction_attempts_list.append({
                         'attempt': attempt,
                         'original_error': error_message,
                         'corrected_sql': sql_query
@@ -616,7 +717,9 @@ def sql_node(state: AgentState) -> AgentState:
                 
                 if success:
                     results = result
-                    logger.info(f"✅ SQL executed successfully on attempt {attempt + 1}: {len(results)} rows returned")
+                    rows_returned = len(results)
+                    success = True
+                    logger.info(f"✅ SQL executed successfully on attempt {attempt + 1}: {rows_returned} rows returned")
                     
                     # VALIDACIÓN 3: Validar resultados SQL DESPUÉS de ejecutar
                     try:
@@ -625,6 +728,9 @@ def sql_node(state: AgentState) -> AgentState:
                         if not results_validation.is_valid:
                             error_msg = results_validation.error_msg or "Resultados SQL inválidos"
                             logger.error(f"❌ Sin resultados: {error_msg} | Query: {sql_query[:50]}...")
+                            success = False
+                            error_message = error_msg
+                            error_type = "validation_error"
                             return friendly_error_state(
                                 "No encontré datos para tu consulta. Verifica los filtros o intenta con otra pregunta.",
                                 state
@@ -637,6 +743,7 @@ def sql_node(state: AgentState) -> AgentState:
                             state['sql_validation_warnings'] = results_validation.warnings
                         
                         row_count = results_validation.metadata.get('row_count', len(results))
+                        rows_returned = row_count
                         logger.info(f"✅ SQL results validation passed | Rows: {row_count}")
                     except Exception as e:
                         logger.error(f"❌ Error validando resultados SQL: {e}", exc_info=True)
@@ -644,11 +751,18 @@ def sql_node(state: AgentState) -> AgentState:
                         logger.warning("⚠️ Continuando sin validación de resultados debido a error en validador")
                     
                     if attempt > 0:
+                        correction_attempts = attempt
                         logger.info(f"🎉 Self-correction successful after {attempt} correction attempt(s)")
+                    
+                    # Guardar resultados en estado
+                    state['sql_query'] = sql_query
+                    state['sql_results'] = results
+                    state['sql_correction_attempts'] = correction_attempts
                     
                     break  # Éxito, salir del loop
                 else:
                     error_message = result
+                    error_type = "sql_execution_error"
                     logger.warning(f"❌ SQL execution failed on attempt {attempt + 1}: {error_message}")
                     
                     if attempt < max_retries:
@@ -691,13 +805,13 @@ def sql_node(state: AgentState) -> AgentState:
             'query': sql_query,
             'num_results': len(results),
             'correction_attempts': correction_attempts if correction_attempts else None,
-            'num_attempts': len(correction_attempts) + 1
+            'num_attempts': correction_attempts + 1  # 1 intento inicial + N correcciones
         })
 
         # Añadir mensaje
-        if correction_attempts:
+        if correction_attempts > 0:
             state['messages'].append(
-                AIMessage(content=f"Ejecuté la query (corregida después de {len(correction_attempts)} intento(s)): {sql_query}")
+                AIMessage(content=f"Ejecuté la query (corregida después de {correction_attempts} intento(s)): {sql_query}")
             )
         else:
             state['messages'].append(
@@ -708,10 +822,31 @@ def sql_node(state: AgentState) -> AgentState:
 
     except Exception as e:
         logger.error(f"Error in sql_node: {e}", exc_info=True)
-        state['error'] = str(e)
+        success = False
+        error_message = str(e)
+        error_type = type(e).__name__
+        state['error'] = error_message
         state['sql_query'] = None
         state['sql_results'] = []
         return state
+    
+    finally:
+        # Tracking al final (siempre se ejecuta)
+        try:
+            latency_ms = int((time.time() - start_time) * 1000)
+            track_sql_execution(
+                query=query,
+                sql_query=sql_query,
+                success=success,
+                latency_ms=latency_ms,
+                rows_returned=rows_returned,
+                error_type=error_type,
+                correction_attempts=correction_attempts,
+                session_id=state.get('session_id'),
+                error_message=error_message
+            )
+        except Exception as e:
+            logger.debug(f"Error tracking SQL execution: {e}")
 
 
 # ============ Format Results Node ============
@@ -981,7 +1116,15 @@ def viz_node(state: AgentState) -> AgentState:
     - KPIs estadísticos (kpis)
     - Combinación de ambos
     """
+    start_time = time.time()
     logger.info("=== Viz Node (Hybrid) ===")
+
+    # Variables para tracking
+    query = state.get('user_query', '')
+    chart_type = 'unknown'
+    layer_used = 'unknown'
+    success = False
+    error_message = None
 
     try:
         # Verificar si hay KPIs para graficar
@@ -1090,6 +1233,10 @@ def viz_node(state: AgentState) -> AgentState:
 
         logger.info(f"Chart decided: {chart_config.get('chart_type')} (source: {chart_config.get('source')})")
 
+        # Extraer información para tracking
+        chart_type = chart_config.get('chart_type', 'unknown')
+        layer_used = chart_config.get('source', 'unknown')  # 'rules', 'finetuned', 'llm'
+
         # Generar gráfica con viz_tool
         from app.tools.viz_tool import viz_tool
 
@@ -1121,13 +1268,32 @@ def viz_node(state: AgentState) -> AgentState:
         state['messages'].append(AIMessage(content=response))
 
         logger.info("✓ Viz node completed with hybrid system")
+        success = True
 
         return state
 
     except Exception as e:
         logger.error(f"Error in viz_node: {e}")
-        state['error'] = str(e)
+        success = False
+        error_message = str(e)
+        state['error'] = error_message
         return state
+    
+    finally:
+        # Tracking al final (siempre se ejecuta)
+        try:
+            latency_ms = int((time.time() - start_time) * 1000)
+            track_viz_generation(
+                query=query,
+                chart_type=chart_type,
+                layer_used=layer_used,
+                success=success,
+                latency_ms=latency_ms,
+                session_id=state.get('session_id'),
+                error_message=error_message
+            )
+        except Exception as e:
+            logger.debug(f"Error tracking viz generation: {e}")
 
 
 # Para testing

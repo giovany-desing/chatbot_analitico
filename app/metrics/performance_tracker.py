@@ -11,7 +11,6 @@ from functools import wraps
 from datetime import datetime, timedelta
 from sqlalchemy import text
 from app.db.connections import get_postgres
-from app.agents.state import AgentState
 
 logger = logging.getLogger(__name__)
 
@@ -149,7 +148,7 @@ def _insert_metric(data: Dict[str, Any]) -> None:
             'success': data.get('success', True),
             'latency_ms': data.get('latency_ms', 0),
             'error_message': data.get('error_message')[:1000] if data.get('error_message') else None,
-            'metadata': data.get('metadata') or {}
+            'metadata': json.dumps(data.get('metadata') or {})  # Convertir dict a JSON string para JSONB
         }
         
         session.execute(text(insert_sql), params)
@@ -528,12 +527,12 @@ def track_performance(component: str):
     
     Usage:
         @track_performance('router')
-        def router_node(state: AgentState) -> AgentState:
+        def router_node(state) -> state:
             ...
     """
     def decorator(func: Callable) -> Callable:
         @wraps(func)
-        def wrapper(state: AgentState) -> AgentState:
+        def wrapper(state):
             start_time = time.time()
             success = True
             error_msg = None

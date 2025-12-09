@@ -91,6 +91,25 @@ class Settings(BaseSettings):
         description="Activar uso del modelo fine-tuned en sistema híbrido"
     )
     
+    # ============ Notifications ============
+    NOTIFICATIONS_ENABLED: bool = Field(default=False, description="Habilitar notificaciones externas")
+    NOTIFICATION_CHANNELS: str = Field(default="slack,email", description="Canales separados por coma")
+    
+    # Slack
+    SLACK_WEBHOOK_URL: Optional[str] = Field(default=None, description="Webhook URL de Slack")
+    SLACK_CHANNEL: str = Field(default="#chatbot-alerts", description="Canal de Slack")
+    SLACK_USERNAME: str = Field(default="Chatbot Monitor", description="Username en Slack")
+    SLACK_ICON_EMOJI: str = Field(default=":robot_face:", description="Emoji para Slack")
+    
+    # Email (SMTP)
+    EMAIL_ENABLED: bool = Field(default=False, description="Habilitar notificaciones por email")
+    SMTP_HOST: str = Field(default="smtp.gmail.com", description="Servidor SMTP")
+    SMTP_PORT: int = Field(default=587, description="Puerto SMTP")
+    SMTP_USERNAME: Optional[str] = Field(default=None, description="Usuario SMTP")
+    SMTP_PASSWORD: Optional[str] = Field(default=None, description="Password SMTP")
+    EMAIL_FROM: str = Field(default="chatbot-alerts@yourcompany.com", description="Email remitente")
+    EMAIL_TO: str = Field(default="team@yourcompany.com", description="Emails destinatarios separados por coma")
+    EMAIL_SUBJECT_PREFIX: str = Field(default="[CHATBOT ALERT]", description="Prefijo del asunto")
 
 
 # Singleton: una sola instancia en toda la app

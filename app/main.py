@@ -30,6 +30,9 @@ from app.metrics.performance_tracker import init_metrics
 from .feedback.feedback_service import feedback_service
 from pydantic import BaseModel, Field
 
+# Importar endpoints de métricas (debe ir después de definir app)
+# Los endpoints se registran automáticamente al importar el módulo
+
 class FeedbackRequest(BaseModel):
     feedback_id: int = Field(..., description="ID de la interacción")
     rating: int = Field(..., ge=1, le=5, description="Rating de 1 a 5")
@@ -205,8 +208,13 @@ async def chat(request: ChatRequest):
     try:
         logger.info(f"Received query: {request.message}")
 
+        # Generar session_id único para esta conversación
+        import uuid
+        session_id = str(uuid.uuid4())
+
         # Crear estado inicial
         state = create_initial_state(request.message)
+        state['session_id'] = session_id  # Agregar session_id al estado
 
         # Ejecutar grafo con timeout para evitar que se cuelgue
         # Usar asyncio para ejecutar la función síncrona con timeout
@@ -390,6 +398,16 @@ async def export_retraining_data(max_rating: int = 3):
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error exportando datos: {str(e)}")
+
+
+# ============ Registrar Endpoints de Métricas ============
+# Esto debe ir después de que 'app' esté definido
+try:
+    from app.api.metrics_endpoints import register_metrics_endpoints
+    register_metrics_endpoints(app)
+    logger.info("✅ Endpoints de métricas registrados")
+except Exception as e:
+    logger.warning(f"⚠️ Error registrando endpoints de métricas: {e}. Continuando sin ellos.")
 
 
 # ============ Main ============
