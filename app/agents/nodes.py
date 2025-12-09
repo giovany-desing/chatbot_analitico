@@ -46,14 +46,54 @@ from app.llm.models import (
 from app.tools.sql_tool import mysql_tool
 from app.db.connections import get_postgres
 from app.agents.sql_validator import validate_and_execute_sql, get_table_schema
-from app.validators import (
+from app.validators.data_validator import (
     validate_user_query,
     validate_sql_results,
     validate_data_for_chart,
-    validate_rag_context
+    validate_rag_context,
+    ValidationResult
 )
 
 logger = logging.getLogger(__name__)
+
+# ============ Helper Functions para Estados de Error ============
+
+def error_state_with_message(msg: str, state: AgentState) -> AgentState:
+    """
+    Crea un estado de error con mensaje técnico.
+    
+    Args:
+        msg: Mensaje de error técnico
+        state: Estado actual del agente
+    
+    Returns:
+        Estado con error configurado
+    """
+    state['error'] = msg
+    state['status'] = 'error'
+    logger.error(f"❌ Error state: {msg}")
+    return state
+
+
+def friendly_error_state(user_msg: str, state: AgentState) -> AgentState:
+    """
+    Crea un estado de error con mensaje amigable para el usuario.
+    
+    Args:
+        user_msg: Mensaje amigable para el usuario (no técnico)
+        state: Estado actual del agente
+    
+    Returns:
+        Estado con respuesta amigable
+    """
+    from langchain_core.messages import AIMessage
+    
+    state['response'] = user_msg
+    state['status'] = 'completed'
+    state['messages'].append(AIMessage(content=user_msg))
+    logger.info(f"ℹ️ Friendly error message: {user_msg}")
+    return state
+
 
 def load_kpi_definitions() -> dict:
     """Carga definiciones de KPIs desde el archivo JSON"""
@@ -100,18 +140,25 @@ def hybrid_node(state: AgentState) -> AgentState:
             logger.info(f"   Results: {len(state.get('sql_results', []))} rows")
             
             # VALIDACIÓN ESPECÍFICA PARA DATOS HÍBRIDOS
-            # Verificar que tenemos tanto SQL results como KPIs para visualización híbrida
             sql_results = state.get('sql_results', [])
             kpis = state.get('kpis', {})
+            chart_decision = state.get('chart_config', {})
+            
+            if sql_results and chart_decision:
+                # Validar datos para el tipo de gráfica decidido
+                chart_type = chart_decision.get('chart_type', 'bar')
+                try:
+                    hybrid_validation = validate_data_for_chart(sql_results, chart_type)
+                    if not hybrid_validation.is_valid:
+                        logger.warning(f"⚠️ Hybrid data validation failed: {hybrid_validation.error_msg}")
+                        # No abortar, dejar que viz_node maneje la corrección
+                    else:
+                        logger.info(f"✅ Hybrid data validation passed | Chart type: {chart_type}")
+                except Exception as e:
+                    logger.warning(f"⚠️ Error validando datos híbridos: {e}. Continuando...", exc_info=True)
             
             if sql_results and kpis:
                 logger.info("✅ Hybrid data validation: Both SQL results and KPIs available")
-                # Validar que los datos SQL sean compatibles con visualización
-                # (la validación específica de chart se hace en viz_node)
-                if not sql_results:
-                    logger.warning("⚠️ Hybrid data validation: SQL results empty")
-                    state['error'] = "No hay datos SQL para visualizar en modo híbrido"
-                    return state
             elif not sql_results:
                 logger.warning("⚠️ Hybrid data validation: No SQL results available")
             
@@ -434,12 +481,19 @@ def sql_node(state: AgentState) -> AgentState:
     try:
         # VALIDACIÓN 1: Validar user_query ANTES de generar SQL
         try:
-            validate_user_query(state['user_query'])
-            logger.info("✅ User query validation passed")
-        except ValueError as e:
-            logger.error(f"❌ User query validation failed: {e}")
-            state['error'] = f"Query inválida: {e}. Por favor, reformula tu pregunta."
-            return state
+            validation = validate_user_query(state['user_query'])
+            if not validation.is_valid:
+                error_msg = validation.error_msg or "Query inválida"
+                logger.error(f"❌ Query inválida: {error_msg} | Query: {state['user_query'][:50]}...")
+                return error_state_with_message(
+                    f"Query inválida: {error_msg}. Por favor, reformula tu pregunta.",
+                    state
+                )
+            logger.info(f"✅ User query validation passed | Length: {validation.metadata.get('query_length', 0)}")
+        except Exception as e:
+            logger.error(f"❌ Error en validación de query: {e}", exc_info=True)
+            # Fail-safe: continuar si el validador falla
+            logger.warning("⚠️ Continuando sin validación de query debido a error en validador")
         
         llm = get_llama_model()
         sql_prompt = get_sql_prompt()
@@ -463,10 +517,15 @@ def sql_node(state: AgentState) -> AgentState:
                 # VALIDACIÓN 2: Validar contexto RAG DESPUÉS de obtener ejemplos
                 if rag_examples_list:
                     try:
-                        validate_rag_context(rag_examples_list)
-                        logger.info("✅ RAG context validation passed")
-                    except ValueError as e:
-                        logger.warning(f"⚠️ RAG context validation warning: {e}. Continuing anyway.")
+                        rag_validation = validate_rag_context(rag_examples_list)
+                        if not rag_validation.is_valid:
+                            warning_msg = rag_validation.error_msg or "RAG context inválido"
+                            logger.warning(f"⚠️ RAG falló: {warning_msg} | Continuando sin contexto RAG")
+                        else:
+                            avg_sim = rag_validation.metadata.get('avg_similarity', 0.0)
+                            logger.info(f"✅ RAG context validation passed | Avg similarity: {avg_sim:.3f}")
+                    except Exception as e:
+                        logger.warning(f"⚠️ Error validando RAG context: {e}. Continuing anyway.", exc_info=True)
                 
                 # Formatear ejemplos para el prompt
                 relevant_examples = vectorstore.get_relevant_examples(
@@ -560,19 +619,29 @@ def sql_node(state: AgentState) -> AgentState:
                     logger.info(f"✅ SQL executed successfully on attempt {attempt + 1}: {len(results)} rows returned")
                     
                     # VALIDACIÓN 3: Validar resultados SQL DESPUÉS de ejecutar
-                    validation_result = validate_sql_results(results)
-                    
-                    if not validation_result.is_valid:
-                        logger.error(f"❌ SQL results validation failed: {validation_result.error_msg}")
-                        state['error'] = f"Los resultados de la query no son válidos: {validation_result.error_msg}"
-                        state['sql_query'] = sql_query
-                        state['sql_results'] = None
-                        return state
-                    
-                    if validation_result.warnings:
-                        logger.warning(f"⚠️ SQL results validation warnings: {validation_result.warnings}")
-                        # Agregar warnings al estado para referencia
-                        state['sql_validation_warnings'] = validation_result.warnings
+                    try:
+                        results_validation = validate_sql_results(results, min_rows=1)
+                        
+                        if not results_validation.is_valid:
+                            error_msg = results_validation.error_msg or "Resultados SQL inválidos"
+                            logger.error(f"❌ Sin resultados: {error_msg} | Query: {sql_query[:50]}...")
+                            return friendly_error_state(
+                                "No encontré datos para tu consulta. Verifica los filtros o intenta con otra pregunta.",
+                                state
+                            )
+                        
+                        if results_validation.warnings:
+                            for warning in results_validation.warnings:
+                                logger.warning(f"⚠️ Advertencia datos: {warning}")
+                            # Agregar warnings al estado para referencia
+                            state['sql_validation_warnings'] = results_validation.warnings
+                        
+                        row_count = results_validation.metadata.get('row_count', len(results))
+                        logger.info(f"✅ SQL results validation passed | Rows: {row_count}")
+                    except Exception as e:
+                        logger.error(f"❌ Error validando resultados SQL: {e}", exc_info=True)
+                        # Fail-safe: continuar si el validador falla
+                        logger.warning("⚠️ Continuando sin validación de resultados debido a error en validador")
                     
                     if attempt > 0:
                         logger.info(f"🎉 Self-correction successful after {attempt} correction attempt(s)")
@@ -961,39 +1030,57 @@ def viz_node(state: AgentState) -> AgentState:
         
         chart_type = chart_config.get('chart_type', 'bar')
         
-        # Validar datos para el tipo de gráfica decidido
-        validation_result = validate_data_for_chart(results, chart_type)
-        
-        if not validation_result.is_valid:
-            logger.error(f"❌ Data validation failed for chart type '{chart_type}': {validation_result.error_msg}")
+        # VALIDACIÓN: Validar datos ANTES de crear gráfica
+        try:
+            chart_validation = validate_data_for_chart(
+                data=results,
+                chart_type=chart_type
+            )
             
-            # Intentar sugerir un tipo de gráfica alternativo
-            alternative_charts = {
-                'bar': 'line',
-                'line': 'bar',
-                'pie': 'bar',
-                'scatter': 'bar'
-            }
+            if not chart_validation.is_valid:
+                error_msg = chart_validation.error_msg or "Datos incompatibles con el tipo de gráfica"
+                suggestions = chart_validation.metadata.get('suggestions', [])
+                alternative_chart = chart_validation.metadata.get('alternative_chart')
+                
+                logger.error(f"❌ Datos incompatibles: {error_msg} | Chart type: {chart_type}")
+                
+                if alternative_chart:
+                    logger.info(f"ℹ️ Sugerencia: usar {alternative_chart}")
+                    # Auto-corregir a chart alternativo
+                    chart_config['chart_type'] = alternative_chart
+                    chart_config['reasoning'] = f"Tipo de gráfica cambiado a {alternative_chart} debido a: {error_msg}"
+                    
+                    # Validar nuevamente con el tipo alternativo
+                    alt_validation = validate_data_for_chart(results, alternative_chart)
+                    if alt_validation.is_valid:
+                        logger.info(f"✅ Chart alternativo '{alternative_chart}' es válido")
+                        chart_type = alternative_chart
+                    else:
+                        # Si el alternativo tampoco funciona, retornar error
+                        return friendly_error_state(
+                            "No puedo generar una gráfica con estos datos. " + 
+                            (suggestions[0] if suggestions else "Intenta con otra consulta."),
+                            state
+                        )
+                else:
+                    # No hay alternativa, retornar error con sugerencias
+                    suggestion_msg = suggestions[0] if suggestions else "Intenta con otra consulta."
+                    return friendly_error_state(
+                        f"No puedo generar una gráfica con estos datos. {suggestion_msg}",
+                        state
+                    )
             
-            alternative = alternative_charts.get(chart_type, 'bar')
-            logger.info(f"🔄 Trying alternative chart type: {alternative}")
+            # Si hay sugerencias, loguearlas
+            suggestions = chart_validation.metadata.get('suggestions', [])
+            if suggestions:
+                for suggestion in suggestions:
+                    logger.info(f"ℹ️ Sugerencia de mejora: {suggestion}")
+                chart_config['validation_suggestions'] = suggestions
             
-            # Validar con tipo alternativo
-            alt_validation = validate_data_for_chart(results, alternative)
-            
-            if alt_validation.is_valid:
-                logger.info(f"✅ Alternative chart type '{alternative}' is valid")
-                chart_config['chart_type'] = alternative
-                chart_config['reasoning'] = f"Tipo de gráfica cambiado a {alternative} debido a: {validation_result.error_msg}"
-            else:
-                # Si el alternativo tampoco funciona, retornar error
-                state['error'] = f"No se pueden generar gráficas con estos datos: {validation_result.error_msg}"
-                return state
-        
-        if validation_result.warnings:
-            logger.warning(f"⚠️ Data validation warnings: {validation_result.warnings}")
-            # Agregar warnings al chart_config
-            chart_config['validation_warnings'] = validation_result.warnings
+        except Exception as e:
+            logger.error(f"❌ Error validando datos para gráfica: {e}", exc_info=True)
+            # Fail-safe: continuar si el validador falla
+            logger.warning("⚠️ Continuando sin validación de datos debido a error en validador")
         logger.info("Generating professional chart")
         chart_result = professional_viz_tool.create_chart(
             data=results,

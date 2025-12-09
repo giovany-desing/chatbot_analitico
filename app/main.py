@@ -25,6 +25,7 @@ from app.agents.graph import chatbot_graph
 from app.agents.state import create_initial_state
 from app.db.connections import check_all_connections
 from app.services.cache_service import cache_service
+from app.metrics.performance_tracker import init_metrics
 
 from .feedback.feedback_service import feedback_service
 from pydantic import BaseModel, Field
@@ -68,6 +69,13 @@ async def lifespan(app: FastAPI):
         logger.error("❌ Some database connections failed!")
     else:
         logger.info("✅ All database connections OK")
+    
+    # Inicializar sistema de métricas
+    try:
+        init_metrics()
+        logger.info("✅ Performance metrics system initialized")
+    except Exception as e:
+        logger.warning(f"⚠️ Failed to initialize metrics system: {e}. Continuing without metrics.")
 
     yield
 
