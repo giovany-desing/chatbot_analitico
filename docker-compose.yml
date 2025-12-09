@@ -48,6 +48,7 @@ services:
       - ./app:/app/app
       - ./data:/app/data
       - ./tests:/app/tests  # Volumen para tests
+      - ./scripts:/app/scripts  # Volumen para scripts
 
     networks:
       - chatbot_network

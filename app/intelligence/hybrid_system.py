@@ -22,42 +22,55 @@ class HybridVizSystem:
         self.finetuned_client = FineTunedVizClient(finetuned_endpoint)
         self.llm_fallback = get_llama_model()
 
-    def decide_chart(self, query: str, sql_results: List[Dict]) -> Dict[str, Any]:
+    def decide_chart(self, query: str, sql_results: List[Dict], sql_query: str = "") -> Dict[str, Any]:
         """
         Decide la mejor gráfica usando sistema híbrido.
+        
+        Args:
+            query: Query del usuario
+            sql_results: Resultados de la query SQL
+            sql_query: Query SQL ejecutada (opcional, necesario para fine-tuned model)
 
         Returns:
             Dict con configuración de gráfica
         """
-        logger.info(f"HybridVizSystem: Processing query")
+        logger.info(f"🔍 HybridVizSystem: Processing query")
 
         # CAPA 1: Reglas Determinísticas
-        logger.info("Layer 1: Applying deterministic rules")
+        logger.info("🔹 Capa 1: Aplicando reglas determinísticas...")
         rule_result = self.rules_engine.apply(query, sql_results)
 
         if rule_result.confidence == ConfidenceLevel.HIGH:
-            logger.info(f"✓ Rule match: {rule_result.chart_type} ({rule_result.reasoning})")
+            logger.info(f"✅ Capa 1 (Reglas) activada: {rule_result.chart_type}")
+            logger.info(f"   Reasoning: {rule_result.reasoning}")
             return {
                 **rule_result.config,
                 'source': 'rules',
                 'reasoning': rule_result.reasoning
             }
+        
+        logger.info(f"⚠️ Capa 1 (Reglas) no aplicable, continuando a Capa 2...")
 
         # CAPA 2: Modelo Fine-tuned
-        logger.info("Layer 2: Consulting fine-tuned model")
-        finetuned_result = self.finetuned_client.predict(query, sql_results)
+        logger.info("🔹 Capa 2: Consultando modelo fine-tuned...")
+        
+        finetuned_result = self.finetuned_client.predict(query, sql_query, sql_results)
 
-        if finetuned_result.confidence >= 0.85:
-            logger.info(f"✓ Fine-tuned: {finetuned_result.chart_type} (confidence: {finetuned_result.confidence})")
+        if finetuned_result.confidence >= 0.85 and finetuned_result.chart_type:
+            logger.info(f"✅ Capa 2 (Fine-tuned) activada: {finetuned_result.chart_type} (confidence: {finetuned_result.confidence:.2f})")
+            logger.info(f"   Reasoning: {finetuned_result.reasoning[:100]}...")
             return {
                 **finetuned_result.config,
                 'source': 'finetuned',
                 'reasoning': finetuned_result.reasoning
             }
+        else:
+            logger.info(f"⚠️ Capa 2 (Fine-tuned) no aplicable o falló: {finetuned_result.reasoning}")
 
-        # CAPA 3: LLM Grande (Llama 90B)
-        logger.info("Layer 3: Fallback to LLM")
+        # CAPA 3: LLM Grande (Llama 3.3 70B)
+        logger.info("🔹 Capa 3: Fallback a LLM (Llama 3.3 70B)...")
         llm_result = self._llm_decide(query, sql_results)
+        logger.info(f"✅ Capa 3 (LLM) activada: {llm_result.get('chart_type', 'unknown')}")
 
         return {
             **llm_result,

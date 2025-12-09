@@ -37,11 +37,15 @@ from app.llm.models import (
     invoke_llm_with_retry,
     get_router_prompt,
     get_sql_prompt,
+    get_sql_correction_prompt,
     get_kpi_prompt,
     get_viz_prompt,
-    get_general_prompt
+    get_general_prompt,
+    get_embedding_model
 )
 from app.tools.sql_tool import mysql_tool
+from app.db.connections import get_postgres
+from app.agents.sql_validator import validate_and_execute_sql, get_table_schema
 
 logger = logging.getLogger(__name__)
 
@@ -86,6 +90,8 @@ def hybrid_node(state: AgentState) -> AgentState:
         # 3. Generar visualización
         if state.get('sql_results'):
             logger.info("Step 3: Generating visualization")
+            logger.info(f"   SQL Query: {state.get('sql_query', 'N/A')}")
+            logger.info(f"   Results: {len(state.get('sql_results', []))} rows")
             state = viz_node(state)
 
         # 4. Generar resumen combinado
@@ -146,14 +152,61 @@ Genera un resumen ejecutivo de 2-3 párrafos explicando los hallazgos principale
 
 # ============ Router Node ============
 
+def search_router_examples(query: str, top_k: int = 3) -> list:
+    """
+    Busca ejemplos similares en router_examples usando búsqueda vectorial.
+    
+    Args:
+        query: Query del usuario
+        top_k: Número de ejemplos a recuperar
+    
+    Returns:
+        Lista de tuplas (query, intent, reasoning, similarity)
+    """
+    try:
+        embedding_model = get_embedding_model()
+        postgres = get_postgres()
+        
+        # Generar embedding del query
+        query_embedding = embedding_model.encode(query).tolist()
+        query_embedding_str = "[" + ",".join(str(float(v)) for v in query_embedding) + "]"
+        
+        # Buscar ejemplos similares
+        search_sql = """
+        SELECT
+            query,
+            intent,
+            reasoning,
+            1 - (embedding <=> %s::vector) as similarity
+        FROM router_examples
+        ORDER BY embedding <=> %s::vector
+        LIMIT %s
+        """
+        
+        with postgres.get_session() as session:
+            # Obtener conexión raw de psycopg2
+            conn = session.connection()
+            cursor = conn.connection.cursor()
+            cursor.execute(search_sql, (query_embedding_str, query_embedding_str, top_k))
+            results = cursor.fetchall()
+            cursor.close()
+        
+        return results
+        
+    except Exception as e:
+        logger.warning(f"Error searching router examples: {e}")
+        return []
+
+
 def router_node(state: AgentState) -> AgentState:
     """
-    Clasifica la intención del usuario (versión mejorada).
+    Clasifica la intención del usuario usando RAG + Few-Shot classification.
     
     Mejoras:
-    - Mejor detección de keywords
-    - Fallback a SQL si hay duda
-    - Logging más detallado
+    - Usa búsqueda vectorial en router_examples para encontrar ejemplos similares
+    - Votación mayoritaria de los top 3 ejemplos más similares
+    - Fallback a LLM si hay empate o baja confianza
+    - Mantiene detección de saludos/general para queries obvias
     
     Args:
         state: Estado actual
@@ -161,7 +214,7 @@ def router_node(state: AgentState) -> AgentState:
     Returns:
         Estado con 'intent' actualizado
     """
-    logger.info("=== Router Node ===")
+    logger.info("=== Router Node (RAG + Few-Shot) ===")
     
     # Obtener user_query del estado - puede estar en diferentes lugares
     user_query = state.get('user_query') or ''
@@ -173,18 +226,19 @@ def router_node(state: AgentState) -> AgentState:
                 user_query = msg.content
                 break
     
-    # Normalizar
-    user_query = str(user_query).lower().strip() if user_query else ''
+    # Normalizar (pero mantener original para búsqueda vectorial)
+    user_query_original = str(user_query).strip() if user_query else ''
+    user_query_lower = user_query_original.lower().strip() if user_query_original else ''
     
-    logger.info(f"user_query extracted: '{user_query}'")
+    logger.info(f"user_query extracted: '{user_query_original}'")
     
-    if not user_query:
+    if not user_query_original:
         logger.error(f"user_query is empty! State: {list(state.keys())}, messages: {len(state.get('messages', []))}")
         # Fallback: intentar obtener del estado original
-        user_query = str(state.get('user_query', '')).strip().lower()
+        user_query_original = str(state.get('user_query', '')).strip()
+        user_query_lower = user_query_original.lower()
 
     try:
-        
         # PRIORIDAD 1: Detectar saludos y preguntas generales PRIMERO
         # Estas deben tener la máxima prioridad para evitar clasificación incorrecta
         general_keywords = [
@@ -195,106 +249,129 @@ def router_node(state: AgentState) -> AgentState:
             'qué haces', 'que haces', 'para qué sirves', 'para que sirves'
         ]
         
-        # PRIORIDAD 2: Detectar visualizaciones
-        viz_keywords = ['gráfica', 'grafica', 'chart', 'plot', 'visualiza', 'visualización', 
-                       'visualizacion', 'gráfico', 'grafico', 'diagrama', 'mostrar gráfica']
+        general_matches = [word for word in general_keywords if word in user_query_lower]
         
-        # PRIORIDAD 3: Detectar KPIs (incluye palabras de negocio que son KPIs)
-        kpi_keywords = [
-            'kpi', 'métrica', 'metrica', 'revenue', 'ticket promedio', 
-            'indicador', 'indicadores clave', 'ingresos', 'promedio',
-            'ratio', 'porcentaje', 'estadística', 'estadisticas', 'estadísticas'
-        ]
-        
-        # Detectar si se pide graficar KPIs específicos (debe ser hybrid)
-        kpi_business_terms = ['revenue', 'ingresos', 'ticket', 'promedio', 'ratio', 'ventas totales']
-        wants_kpi_chart = any(word in user_query for word in viz_keywords) and any(word in user_query for word in kpi_business_terms)
-        
-        # PRIORIDAD 4: Detectar queries SQL (solo si hay palabras específicas de datos)
-        # Estas palabras SOLO deben activar SQL si están en contexto de datos
-        sql_keywords = [
-            # Palabras de cantidad
-            'cuántas', 'cuantos', 'cuántos', 'cuanto', 'cuánto', 'cuantas', 'cuantas',
-            # Palabras de datos/entidades
-            'producto', 'productos', 'ventas', 'venta', 'ventas', 'correctivas', 'preventivas',
-            'orden', 'ordenes', 'órdenes', 'compra', 'compras', 'cliente', 'clientes',
-            # Palabras de acción
-            'muestra', 'muéstrame', 'lista', 'listar', 'mostrar', 'dame', 'dame',
-            # Palabras de existencia
-            'hay', 'existen', 'existe', 'tiene', 'tienen',
-            # Palabras de agregación
-            'total', 'suma', 'promedio', 'máximo', 'mínimo', 'contar', 'count',
-            # Palabras genéricas de datos
-            'datos', 'registros', 'filas', 'tabla', 'tablas'
-        ]
-        
-        # PRIORIDAD: Las intenciones específicas (viz, kpi, sql) tienen prioridad sobre general
-        # Solo clasificar como "general" si NO hay indicadores de intenciones específicas
-        
-        logger.info(f"Analyzing query: '{user_query}'")
-        
-        # Detectar todas las keywords encontradas
-        viz_matches = [word for word in viz_keywords if word in user_query]
-        kpi_matches = [word for word in kpi_keywords if word in user_query]
-        sql_matches = [word for word in sql_keywords if word in user_query]
-        general_matches = [word for word in general_keywords if word in user_query]
-        
-        logger.info(f"Keyword matches - viz: {viz_matches}, kpi: {kpi_matches}, sql: {sql_matches}, general: {general_matches}")
-        
-        # 0. Verificar si se pide graficar KPIs (debe ser hybrid)
-        # Si hay palabras de visualización Y palabras de KPI/negocio, es hybrid
-        kpi_business_terms = ['revenue', 'ingresos', 'ticket', 'promedio', 'ratio', 'ventas totales', 'kpi', 'métrica']
-        has_viz = bool(viz_matches)
-        has_kpi_term = any(word in user_query for word in kpi_business_terms)
-        
-        if has_viz and has_kpi_term:
-            intent = 'hybrid'
-            logger.info(f"Hybrid detection (KPI chart): {intent} (viz: {viz_matches}, kpi terms: {has_kpi_term})")
-        # 1. Verificar visualizaciones PRIMERO (tiene máxima prioridad para queries de datos)
-        elif viz_matches:
-            intent = 'viz'
-            logger.info(f"Viz keyword detection: {intent} (matched: {viz_matches})")
-        # 2. Verificar KPIs
-        elif kpi_matches or has_kpi_term:
-            intent = 'kpi'
-            logger.info(f"KPI keyword detection: {intent} (matched: {kpi_matches or 'business terms'})")
-        # 3. Verificar SQL (queries de datos) - PRIORIDAD sobre general
-        elif sql_matches:
-            # Si tiene palabras de datos, es SQL aunque tenga palabras generales
-            intent = 'sql'
-            logger.info(f"SQL keyword detection: {intent} (matched: {sql_matches})")
-        # 4. Verificar si es un saludo o pregunta general (solo si no hay intenciones específicas)
-        elif general_matches:
+        # Si es claramente un saludo/general, clasificar directamente
+        if general_matches:
             intent = 'general'
             logger.info(f"General keyword detection: {intent} (matched: {general_matches})")
+            state['intent'] = intent
+            state['intermediate_steps'].append({
+                'node': 'router',
+                'intent': intent,
+                'method': 'keyword',
+                'query': user_query_original
+            })
+            return state
+        
+        # PRIORIDAD 2: Usar RAG + Few-Shot classification
+        logger.info("Using RAG + Few-Shot classification")
+        
+        # Buscar los 3 ejemplos más similares
+        rag_results = search_router_examples(user_query_original, top_k=3)
+        
+        if rag_results and len(rag_results) > 0:
+            logger.info(f"Found {len(rag_results)} similar examples from RAG")
+            
+            # Extraer intents y similitudes
+            intent_votes = {}
+            similarities = []
+            
+            for query_ex, intent_ex, reasoning_ex, similarity in rag_results:
+                intent_votes[intent_ex] = intent_votes.get(intent_ex, 0) + 1
+                similarities.append(similarity)
+                logger.info(f"  [{intent_ex}] (sim: {similarity:.3f}) - '{query_ex}'")
+            
+            # Calcular similitud promedio (confianza)
+            avg_similarity = sum(similarities) / len(similarities) if similarities else 0.0
+            logger.info(f"Average similarity: {avg_similarity:.3f}")
+            
+            # Votación mayoritaria
+            if intent_votes:
+                # Ordenar por votos (y luego por similitud si hay empate)
+                sorted_intents = sorted(
+                    intent_votes.items(),
+                    key=lambda x: (x[1], max([s for q, i, r, s in rag_results if i == x[0]], default=0)),
+                    reverse=True
+                )
+                
+                predicted_intent = sorted_intents[0][0]
+                votes = sorted_intents[0][1]
+                total_votes = sum(intent_votes.values())
+                
+                logger.info(f"Voting result: {predicted_intent} ({votes}/{total_votes} votes, confidence: {avg_similarity:.3f})")
+                
+                # Verificar condiciones para usar RAG o fallback a LLM
+                has_tie = len([v for v in intent_votes.values() if v == votes]) > 1
+                low_confidence = avg_similarity < 0.6  # Umbral de confianza
+                
+                if has_tie or low_confidence:
+                    logger.info(f"Tie detected or low confidence (tie: {has_tie}, confidence: {avg_similarity:.3f}), using LLM fallback")
+                    # Fallback a LLM
+                    llm = get_llama_model()
+                    prompt = get_router_prompt()
+                    
+                    # Incluir ejemplos RAG en el prompt para few-shot
+                    examples_text = "\n".join([
+                        f"- Query: '{q}' → Intent: {i} (sim: {s:.3f})"
+                        for q, i, r, s in rag_results
+                    ])
+                    
+                    formatted_prompt = f"""{prompt.format(user_query=user_query_original)}
+
+Ejemplos similares encontrados:
+{examples_text}
+
+Basándote en estos ejemplos, clasifica la query del usuario."""
+                    
+                    llm_intent = invoke_llm_with_retry(
+                        llm,
+                        [{"role": "user", "content": formatted_prompt}]
+                    )
+                    
+                    llm_intent = llm_intent.strip().lower()
+                    logger.info(f"LLM classification (with RAG examples): {llm_intent}")
+                    intent = llm_intent
+                else:
+                    # Usar resultado de votación
+                    intent = predicted_intent
+                    logger.info(f"Using RAG voting result: {intent}")
+            else:
+                # No se encontraron ejemplos, usar LLM
+                logger.info("No examples found in RAG, using LLM")
+                llm = get_llama_model()
+                prompt = get_router_prompt()
+                formatted_prompt = prompt.format(user_query=user_query_original)
+                
+                llm_intent = invoke_llm_with_retry(
+                    llm,
+                    [{"role": "user", "content": formatted_prompt}]
+                )
+                
+                llm_intent = llm_intent.strip().lower()
+                logger.info(f"LLM classification: {llm_intent}")
+                intent = llm_intent
         else:
-            # Usar LLM para clasificar (solo si no detectamos keywords)
-            logger.info("No keywords detected, using LLM for classification")
+            # No se encontraron ejemplos en RAG, usar LLM directamente
+            logger.info("No RAG results, using LLM for classification")
             llm = get_llama_model()
             prompt = get_router_prompt()
-
-            formatted_prompt = prompt.format(user_query=state['user_query'])
-
+            formatted_prompt = prompt.format(user_query=user_query_original)
+            
             llm_intent = invoke_llm_with_retry(
                 llm,
                 [{"role": "user", "content": formatted_prompt}]
             )
-
+            
             llm_intent = llm_intent.strip().lower()
             logger.info(f"LLM classification: {llm_intent}")
-            
-            # Validar que el LLM no sobreescriba con "general" si hay indicadores de datos
-            if llm_intent == 'general' and (sql_matches or kpi_matches or viz_matches):
-                logger.warning(f"LLM classified as 'general' but found data keywords, overriding to 'sql'")
-                intent = 'sql'
-            else:
-                intent = llm_intent
+            intent = llm_intent
 
         # Validar intent
         valid_intents = ['sql', 'kpi', 'viz', 'general', 'hybrid']
         if intent not in valid_intents:
-            logger.warning(f"Invalid intent '{intent}', defaulting to 'general'")
-            intent = 'general'  # Default a general si hay duda (más seguro que SQL)
+            logger.warning(f"Invalid intent '{intent}', defaulting to 'sql'")
+            intent = 'sql'  # Default a SQL si hay duda (más útil que general)
 
         logger.info(f"✓ Final intent: {intent}")
 
@@ -303,13 +380,15 @@ def router_node(state: AgentState) -> AgentState:
         state['intermediate_steps'].append({
             'node': 'router',
             'intent': intent,
-            'query': state['user_query']
+            'method': 'rag_fewshot' if rag_results else 'llm',
+            'query': user_query_original,
+            'rag_results_count': len(rag_results) if rag_results else 0
         })
 
         return state
 
     except Exception as e:
-        logger.error(f"Error in router_node: {e}")
+        logger.error(f"Error in router_node: {e}", exc_info=True)
         state['error'] = str(e)
         state['intent'] = 'sql'  # Fallback seguro
         return state
@@ -319,18 +398,26 @@ def router_node(state: AgentState) -> AgentState:
 
 def sql_node(state: AgentState) -> AgentState:
     """
-    Genera y ejecuta query SQL (versión con RAG).
+    Genera y ejecuta query SQL con RAG y Self-Correction.
+    
+    Características:
+    - Usa RAG para obtener ejemplos relevantes
+    - Self-correction: intenta corregir errores SQL automáticamente
+    - Máximo 2 reintentos de corrección
+    - Logging detallado de cada intento
     """
-    logger.info("=== SQL Node (with RAG) ===")
+    logger.info("=== SQL Node (with RAG + Self-Correction) ===")
 
     try:
         llm = get_llama_model()
-        prompt = get_sql_prompt()
+        sql_prompt = get_sql_prompt()
+        correction_prompt = get_sql_correction_prompt()
 
         # Obtener schema info
         schema_info = mysql_tool.get_schema_info()
+        detailed_schema = get_table_schema()
 
-        # **NUEVO: Usar RAG para obtener ejemplos relevantes (con timeout)**
+        # **Usar RAG para obtener ejemplos relevantes (con timeout)**
         try:
             relevant_examples = vectorstore.get_relevant_examples(
                   state['user_query'],
@@ -341,59 +428,146 @@ def sql_node(state: AgentState) -> AgentState:
             logger.warning(f"RAG search failed or timed out: {e}. Continuing without examples.")
             relevant_examples = "No hay ejemplos similares disponibles."
 
-        # Formatear prompt con ejemplos relevantes
-        formatted_prompt = prompt.format(
-            schema_info=schema_info,
-            examples=relevant_examples,  # Usar ejemplos del RAG
-            user_query=state['user_query']
-        )
-        #####
-        # Generar SQL
-        logger.info("Generating SQL query...")
-        sql_query = invoke_llm_with_retry(
-            llm,
-            [{"role": "user", "content": formatted_prompt}]
-        )
+        # Máximo de reintentos (incluyendo el intento inicial)
+        max_retries = 2
+        sql_query = None
+        results = None
+        error_message = None
+        correction_attempts = []
 
-        # Limpiar query (remover markdown, etc.)
-        sql_query = sql_query.strip()
-        if sql_query.startswith('```sql'):
-            sql_query = sql_query.split('```sql')[1].split('```')[0].strip()
-        elif sql_query.startswith('```'):
-            sql_query = sql_query.split('```')[1].split('```')[0].strip()
+        for attempt in range(max_retries + 1):  # 0, 1, 2 (3 intentos totales)
+            try:
+                if attempt == 0:
+                    # Primer intento: generar SQL desde cero
+                    logger.info(f"🔄 Attempt {attempt + 1}/{max_retries + 1}: Generating initial SQL query...")
+                    
+                    # Formatear prompt con ejemplos relevantes
+                    formatted_prompt = sql_prompt.format(
+                        schema_info=schema_info,
+                        examples=relevant_examples,
+                        user_query=state['user_query']
+                    )
+                    
+                    sql_query = invoke_llm_with_retry(
+                        llm,
+                        [{"role": "user", "content": formatted_prompt}]
+                    )
+                    
+                    # Limpiar query (remover markdown, etc.)
+                    sql_query = sql_query.strip()
+                    if sql_query.startswith('```sql'):
+                        sql_query = sql_query.split('```sql')[1].split('```')[0].strip()
+                    elif sql_query.startswith('```'):
+                        sql_query = sql_query.split('```')[1].split('```')[0].strip()
+                    
+                    logger.info(f"Generated SQL (attempt {attempt + 1}): {sql_query}")
+                else:
+                    # Intentos de corrección
+                    logger.warning(f"🔄 Attempt {attempt + 1}/{max_retries + 1}: Attempting SQL self-correction...")
+                    logger.warning(f"   Previous error: {error_message}")
+                    logger.warning(f"   Previous SQL: {sql_query}")
+                    
+                    # Formatear prompt de corrección
+                    formatted_correction_prompt = correction_prompt.format(
+                        schema_info=detailed_schema,
+                        original_sql=sql_query,
+                        error_message=error_message,
+                        user_query=state['user_query']
+                    )
+                    
+                    corrected_sql = invoke_llm_with_retry(
+                        llm,
+                        [{"role": "user", "content": formatted_correction_prompt}]
+                    )
+                    
+                    # Limpiar query corregida
+                    corrected_sql = corrected_sql.strip()
+                    if corrected_sql.startswith('```sql'):
+                        corrected_sql = corrected_sql.split('```sql')[1].split('```')[0].strip()
+                    elif corrected_sql.startswith('```'):
+                        corrected_sql = corrected_sql.split('```')[1].split('```')[0].strip()
+                    
+                    sql_query = corrected_sql
+                    logger.info(f"Corrected SQL (attempt {attempt + 1}): {sql_query}")
+                    correction_attempts.append({
+                        'attempt': attempt,
+                        'original_error': error_message,
+                        'corrected_sql': sql_query
+                    })
 
-        logger.info(f"Generated SQL: {sql_query}")
+                # Validar y ejecutar SQL
+                logger.info(f"Validating and executing SQL (attempt {attempt + 1})...")
+                success, result = validate_and_execute_sql(sql_query)
+                
+                if success:
+                    results = result
+                    logger.info(f"✅ SQL executed successfully on attempt {attempt + 1}: {len(results)} rows returned")
+                    
+                    if attempt > 0:
+                        logger.info(f"🎉 Self-correction successful after {attempt} correction attempt(s)")
+                    
+                    break  # Éxito, salir del loop
+                else:
+                    error_message = result
+                    logger.warning(f"❌ SQL execution failed on attempt {attempt + 1}: {error_message}")
+                    
+                    if attempt < max_retries:
+                        logger.info(f"   Will retry with correction (attempts remaining: {max_retries - attempt})")
+                    else:
+                        logger.error(f"   Max retries ({max_retries + 1}) reached. Giving up.")
+                        break
 
-        # Ejecutar query con manejo de errores
-        logger.info("Executing SQL query...")
-        try:
-            results = mysql_tool._run(sql_query)
-            logger.info(f"Query returned {len(results)} rows")
-        except Exception as e:
-            logger.error(f"Error executing SQL query: {e}")
-            state['error'] = f"Error ejecutando query SQL: {str(e)}. Verifica la conexión a la base de datos."
+            except Exception as e:
+                error_message = f"Unexpected error during SQL generation/execution: {str(e)}"
+                logger.error(f"❌ Error in attempt {attempt + 1}: {error_message}", exc_info=True)
+                
+                if attempt < max_retries:
+                    logger.info(f"   Will retry with correction (attempts remaining: {max_retries - attempt})")
+                else:
+                    logger.error(f"   Max retries ({max_retries + 1}) reached. Giving up.")
+                    break
+
+        # Verificar si tuvimos éxito
+        if results is None:
+            # Todos los intentos fallaron
+            logger.error(f"❌ All SQL execution attempts failed. Final error: {error_message}")
+            state['error'] = f"Error ejecutando query SQL después de {max_retries + 1} intentos: {error_message}"
+            state['sql_query'] = sql_query  # Guardar la última query intentada
             state['sql_results'] = None
-            # Continuar sin resultados, el format_results manejará el error
+            state['intermediate_steps'].append({
+                'node': 'sql',
+                'query': sql_query,
+                'error': error_message,
+                'correction_attempts': correction_attempts,
+                'num_attempts': max_retries + 1
+            })
             return state
 
-        # Actualizar estado
+        # Éxito: actualizar estado
         state['sql_query'] = sql_query
         state['sql_results'] = results
         state['intermediate_steps'].append({
             'node': 'sql',
             'query': sql_query,
-            'num_results': len(results)
+            'num_results': len(results),
+            'correction_attempts': correction_attempts if correction_attempts else None,
+            'num_attempts': len(correction_attempts) + 1
         })
 
         # Añadir mensaje
-        state['messages'].append(
-            AIMessage(content=f"Ejecuté la query: {sql_query}")
-        )
+        if correction_attempts:
+            state['messages'].append(
+                AIMessage(content=f"Ejecuté la query (corregida después de {len(correction_attempts)} intento(s)): {sql_query}")
+            )
+        else:
+            state['messages'].append(
+                AIMessage(content=f"Ejecuté la query: {sql_query}")
+            )
 
         return state
 
     except Exception as e:
-        logger.error(f"Error in sql_node: {e}")
+        logger.error(f"Error in sql_node: {e}", exc_info=True)
         state['error'] = str(e)
         state['sql_query'] = None
         state['sql_results'] = []
@@ -703,9 +877,11 @@ def viz_node(state: AgentState) -> AgentState:
 
         # USAR SISTEMA HÍBRIDO
         logger.info("Using HybridVizSystem for chart decision")
+        sql_query = state.get('sql_query', '')
         chart_config = hybrid_viz.decide_chart(
             query=state['user_query'],
-            sql_results=results
+            sql_results=results,
+            sql_query=sql_query
         )
         logger.info("Generating professional chart")
         chart_result = professional_viz_tool.create_chart(

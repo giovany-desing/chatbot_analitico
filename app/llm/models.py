@@ -285,6 +285,48 @@ def get_sql_prompt() -> ChatPromptTemplate:
     return ChatPromptTemplate.from_template(template)
 
 
+def get_sql_correction_prompt() -> ChatPromptTemplate:
+    """
+    Prompt para corregir queries SQL que fallaron.
+    
+    Returns:
+        ChatPromptTemplate
+    """
+    template = """Eres un experto en SQL especializado en corregir errores de queries.
+
+**ESQUEMA DE LA BASE DE DATOS:**
+
+{schema_info}
+
+**QUERY SQL ORIGINAL (CON ERROR):**
+
+```sql
+{original_sql}
+```
+
+**ERROR DE MySQL:**
+
+{error_message}
+
+**INSTRUCCIONES:**
+
+1. Analiza el error y identifica la causa (columna inexistente, tabla incorrecta, sintaxis, etc.)
+2. Corrige la query SQL basándote en el schema proporcionado
+3. Asegúrate de usar nombres de columnas y tablas correctos
+4. Verifica la sintaxis SQL (MySQL 8.0)
+5. Mantén la intención original de la query
+6. Si el error es por columna inexistente, verifica el schema y usa el nombre correcto
+7. Si el error es por tabla inexistente, usa: ventas_preventivas o ventas_correctivas
+
+**PREGUNTA ORIGINAL DEL USUARIO:**
+
+{user_query}
+
+**QUERY SQL CORREGIDA (solo el SQL, sin explicaciones):**"""
+
+    return ChatPromptTemplate.from_template(template)
+
+
 def get_kpi_prompt() -> ChatPromptTemplate:
     """
     Prompt para calcular KPIs desde resultados SQL.
