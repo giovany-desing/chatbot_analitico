@@ -29,8 +29,8 @@ class Settings(BaseSettings):
         )
 
     # ============ Redis ============
-    REDIS_URL: str = Field(default="redis://localhost:6379/0")
-    REDIS_TTL: int = Field(default=3600, description="TTL en segundos")
+    REDIS_URL: Optional[str] = Field(default=None, description="Redis connection URL (opcional)")
+    REDIS_TTL: int = Field(default=3600, description="Redis TTL in seconds")
 
     # ============ PostgreSQL ============
     POSTGRES_HOST: str = Field(default="localhost")

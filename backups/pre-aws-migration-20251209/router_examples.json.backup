@@ -1,0 +1,157 @@
+[
+  {
+    "query": "Dame una gráfica de barras con los 10 productos más vendidos",
+    "intent": "viz",
+    "reasoning": "Solicitud explícita de visualización"
+  },
+  {
+    "query": "Muéstrame un chart de las ventas por mes",
+    "intent": "viz",
+    "reasoning": "Pide chart/gráfico"
+  },
+  {
+    "query": "Visualiza las tendencias de revenue",
+    "intent": "viz",
+    "reasoning": "Verbo 'visualiza' indica gráfica"
+  },
+  {
+    "query": "¿Cuántos productos se vendieron en enero?",
+    "intent": "sql",
+    "reasoning": "Pregunta cuantitativa sobre datos específicos"
+  },
+  {
+    "query": "Lista las ventas del producto X en 2024",
+    "intent": "sql",
+    "reasoning": "Consulta de datos tabulares"
+  },
+  {
+    "query": "Dame el total de ventas preventivas por fecha",
+    "intent": "sql",
+    "reasoning": "Extracción de datos agregados"
+  },
+  {
+    "query": "¿Cuál es el KPI de revenue este trimestre?",
+    "intent": "kpi",
+    "reasoning": "Pregunta explícita por KPI"
+  },
+  {
+    "query": "Muéstrame las métricas clave de ventas",
+    "intent": "kpi",
+    "reasoning": "Solicitud de métricas/indicadores"
+  },
+  {
+    "query": "¿Cómo calcular el indicador de crecimiento?",
+    "intent": "kpi",
+    "reasoning": "Pregunta sobre cálculo de indicadores"
+  },
+  {
+    "query": "¿Qué es una venta preventiva?",
+    "intent": "general",
+    "reasoning": "Pregunta conceptual sin datos"
+  },
+  {
+    "query": "Explícame el sistema de ventas",
+    "intent": "general",
+    "reasoning": "Solicitud de explicación general"
+  },
+  {
+    "query": "¿Cómo funciona este chatbot?",
+    "intent": "general",
+    "reasoning": "Pregunta sobre el sistema"
+  },
+  {
+    "query": "Dame estadísticas completas",
+    "intent": "hybrid",
+    "reasoning": "Query ambigua que requiere datos + visualización"
+  },
+  {
+    "query": "Análisis completo de ventas del último año con gráficas",
+    "intent": "hybrid",
+    "reasoning": "Solicitud explícita de datos + viz"
+  },
+  {
+    "query": "Reporte visual de productos top",
+    "intent": "hybrid",
+    "reasoning": "Combina reporte (datos) + visual"
+  },
+  {
+    "query": "¿Cómo van las ventas?",
+    "intent": "hybrid",
+    "reasoning": "Pregunta vaga que necesita datos + contexto visual"
+  },
+  {
+    "query": "Dame un resumen del rendimiento",
+    "intent": "hybrid",
+    "reasoning": "Resumen implica datos + posible visualización"
+  },
+  {
+    "query": "Muestra tendencias de ventas",
+    "intent": "viz",
+    "reasoning": "Tendencias se visualizan mejor en gráficos"
+  },
+  {
+    "query": "¿Cuánto vendimos en total?",
+    "intent": "sql",
+    "reasoning": "Pregunta específica por un valor numérico"
+  },
+  {
+    "query": "Tasa de conversión de ventas",
+    "intent": "kpi",
+    "reasoning": "Tasa/ratio es un KPI"
+  },
+  {
+    "query": "Comparativa visual entre productos",
+    "intent": "viz",
+    "reasoning": "Comparativa + visual = gráfico"
+  },
+  {
+    "query": "Extrae las órdenes de compra mayores a 1000",
+    "intent": "sql",
+    "reasoning": "Extracción con filtro específico"
+  },
+  {
+    "query": "¿Qué productos tenemos?",
+    "intent": "sql",
+    "reasoning": "Lista de entidades en BD"
+  },
+  {
+    "query": "Dashboard de ventas",
+    "intent": "hybrid",
+    "reasoning": "Dashboard implica múltiples elementos: datos + viz + KPIs"
+  },
+  {
+    "query": "Gráfico de líneas con evolución temporal",
+    "intent": "viz",
+    "reasoning": "Especifica tipo de gráfico"
+  },
+  {
+    "query": "¿Cuáles son las diferencias entre ventas preventivas y correctivas?",
+    "intent": "general",
+    "reasoning": "Pregunta conceptual comparativa"
+  },
+  {
+    "query": "Top 5 clientes por revenue con su distribución visual",
+    "intent": "hybrid",
+    "reasoning": "Combina ranking (SQL) + distribución visual (viz)"
+  },
+  {
+    "query": "Proyección de ventas",
+    "intent": "kpi",
+    "reasoning": "Proyección es un indicador predictivo"
+  },
+  {
+    "query": "Heatmap de ventas por región y mes",
+    "intent": "viz",
+    "reasoning": "Heatmap es tipo de visualización"
+  },
+  {
+    "query": "Búscame todas las transacciones de marzo",
+    "intent": "sql",
+    "reasoning": "Búsqueda/consulta de registros específicos"
+  },
+  {
+    "query": "¿Cuál es el ticket promedio?",
+    "intent": "kpi",
+    "reasoning": "Ticket promedio es métrica de negocio"
+  }
+]
