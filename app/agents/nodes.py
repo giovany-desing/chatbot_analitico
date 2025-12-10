@@ -144,10 +144,16 @@ def hybrid_node(state: AgentState) -> AgentState:
         if state.get('error'):
             return state
 
-        # 2. Calcular KPIs (si tiene sentido)
-        if state.get('sql_results'):
+        # 2. Calcular KPIs (solo si NO es una query de visualización)
+        # Si el usuario pide gráfica, NO calcular KPIs porque sobrescribe los datos
+        query_lower = state['user_query'].lower()
+        is_viz_query = any(kw in query_lower for kw in ['grafica', 'gráfica', 'chart', 'plot', 'visualiza', 'muestra gráfica'])
+
+        if 'sql_results' in state and state['sql_results'] and not is_viz_query:
             logger.info("Step 2: Calculating KPIs")
             state = kpi_node(state)
+        elif is_viz_query:
+            logger.info("Step 2: Skipping KPIs (visualization query detected)")
 
         # 3. Generar visualización
         if state.get('sql_results'):

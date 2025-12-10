@@ -62,7 +62,9 @@ class MySQLConnection:
                 echo=settings.DEBUG,       # Log de queries en debug mode
                 connect_args={
                     "connect_timeout": 30,  # Timeout de conexión en segundos
-                    "autocommit": False
+                    "autocommit": False,
+                    "use_pure": True,       # Evita error "Commands out of sync"
+                    "consume_results": True  # Evita error "Commands out of sync"
                 }
             )
 

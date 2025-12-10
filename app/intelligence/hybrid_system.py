@@ -36,20 +36,17 @@ class HybridVizSystem:
         """
         logger.info(f"🔍 HybridVizSystem: Processing query")
 
-        # CAPA 1: Reglas Determinísticas
-        logger.info("🔹 Capa 1: Aplicando reglas determinísticas...")
-        rule_result = self.rules_engine.apply(query, sql_results)
-
-        if rule_result.confidence == ConfidenceLevel.HIGH:
-            logger.info(f"✅ Capa 1 (Reglas) activada: {rule_result.chart_type}")
-            logger.info(f"   Reasoning: {rule_result.reasoning}")
-            return {
-                **rule_result.config,
-                'source': 'rules',
-                'reasoning': rule_result.reasoning
-            }
-        
-        logger.info(f"⚠️ Capa 1 (Reglas) no aplicable, continuando a Capa 2...")
+        # CAPA 1: Reglas Determinísticas (DESHABILITADO PARA TESTING)
+        logger.info("⚠️ Capa 1 (Reglas) DESHABILITADA - Saltando directamente a fine-tuned model")
+        # rule_result = self.rules_engine.apply(query, sql_results)
+        # if rule_result.confidence == ConfidenceLevel.HIGH:
+        #     logger.info(f"✅ Capa 1 (Reglas) activada: {rule_result.chart_type}")
+        #     logger.info(f"   Reasoning: {rule_result.reasoning}")
+        #     return {
+        #         **rule_result.config,
+        #         'source': 'rules',
+        #         'reasoning': rule_result.reasoning
+        #     }
 
         # CAPA 2: Modelo Fine-tuned
         logger.info("🔹 Capa 2: Consultando modelo fine-tuned...")

@@ -139,9 +139,9 @@ class MySQLTool(BaseTool):
                 logger.warning(f"Blocked dangerous keyword: {keyword}")
                 return False
 
-        # Debe empezar con SELECT
-        if not query_upper.startswith('SELECT'):
-            logger.warning("Query must start with SELECT")
+        # Permitir SELECT normal o UNION queries con paréntesis
+        if not (query_upper.startswith('SELECT') or query_upper.startswith('(SELECT')):
+            logger.warning("Query must start with SELECT or (SELECT")
             return False
 
         return True
