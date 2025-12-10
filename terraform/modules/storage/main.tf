@@ -39,10 +39,11 @@ resource "aws_s3_bucket_public_access_block" "training_data" {
   restrict_public_buckets  = true
 }
 
-# Lifecycle para training data (eliminar versiones antiguas después de 90 días)
+# Lifecycle para training data
 resource "aws_s3_bucket_lifecycle_configuration" "training_data" {
   bucket = aws_s3_bucket.training_data.id
 
+  # Regla 1: Eliminar versiones antiguas después de 90 días
   rule {
     id     = "delete-old-versions"
     status = "Enabled"
@@ -51,6 +52,24 @@ resource "aws_s3_bucket_lifecycle_configuration" "training_data" {
 
     noncurrent_version_expiration {
       noncurrent_days = 90
+    }
+  }
+
+  # Regla 2: Eliminar training data exportada mayor a 30 días
+  rule {
+    id     = "delete-old-training-data"
+    status = "Enabled"
+
+    filter {
+      prefix = "retraining/"
+    }
+
+    expiration {
+      days = 30
+    }
+
+    noncurrent_version_expiration {
+      noncurrent_days = 7
     }
   }
 }
@@ -96,25 +115,34 @@ resource "aws_s3_bucket_public_access_block" "backups" {
   restrict_public_buckets  = true
 }
 
-# Lifecycle para backups (retener por 30 días, luego mover a Glacier, eliminar después de 365 días)
+# Lifecycle para backups
 resource "aws_s3_bucket_lifecycle_configuration" "backups" {
   bucket = aws_s3_bucket.backups.id
 
   rule {
-    id     = "backup-lifecycle"
+    id     = "archive-old-backups"
     status = "Enabled"
 
     filter {}  # Agregar filtro vacío (aplica a todos los objetos)
 
+    # Transición a Standard-IA después de 30 días
     transition {
       days          = 30
+      storage_class = "STANDARD_IA"
+    }
+
+    # Transición a Glacier después de 90 días
+    transition {
+      days          = 90
       storage_class = "GLACIER"
     }
 
+    # Eliminar después de 365 días
     expiration {
       days = 365
     }
 
+    # Eliminar versiones antiguas después de 30 días
     noncurrent_version_expiration {
       noncurrent_days = 30
     }
