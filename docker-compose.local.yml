@@ -1,0 +1,146 @@
+version: '3.8'
+
+# ====================================================================
+# Docker Compose para Testing Local con Configuración AWS
+# ====================================================================
+# Este archivo te permite probar localmente la misma configuración que AWS:
+# - PostgreSQL local (en lugar de RDS PostgreSQL)
+# - Redis local
+# - MySQL RDS de AWS (externo)
+# - Mismas variables de entorno que AWS
+#
+# USO:
+# 1. Asegúrate de tener .env.local configurado
+# 2. Ejecuta: docker-compose -f docker-compose.local.yml up -d
+# 3. Accede a: http://localhost:8000
+# ====================================================================
+
+services:
+  # ============ App (FastAPI) ============
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: chatbot_app_local
+    ports:
+      - "8000:8000"
+    environment:
+      # PostgreSQL Local (Docker)
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB}
+
+      # MySQL RDS AWS (Externo - mismo que AWS)
+      - MYSQL_HOST=${MYSQL_HOST}
+      - MYSQL_PORT=${MYSQL_PORT}
+      - MYSQL_USER=${MYSQL_USER}
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD}
+      - MYSQL_DATABASE=${MYSQL_DATABASE}
+
+      # Redis Local (Docker)
+      - REDIS_URL=redis://redis:6379/0
+      - REDIS_TTL=${REDIS_TTL:-3600}
+
+      # API Keys (mismas que AWS)
+      - GROQ_API_KEY=${GROQ_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - MODAL_API_KEY=${MODAL_API_KEY}
+      - FINETUNED_MODEL_ENDPOINT=${FINETUNED_MODEL_ENDPOINT}
+      - USAR_FINETUNED_MODEL=${USAR_FINETUNED_MODEL:-true}
+
+      # LLM Config
+      - LLM_MODEL=${LLM_MODEL:-llama-3.1-70b-versatile}
+      - LLM_TEMPERATURE=${LLM_TEMPERATURE:-0}
+      - LLM_MAX_TOKENS=${LLM_MAX_TOKENS:-2000}
+      - LLM_TIMEOUT=${LLM_TIMEOUT:-30}
+
+      # S3 Buckets (opcional para local)
+      - S3_TRAINING_BUCKET=${S3_TRAINING_BUCKET:-}
+      - S3_BACKUPS_BUCKET=${S3_BACKUPS_BUCKET:-}
+
+      # App Config
+      - APP_NAME=${APP_NAME:-ChatbotAnalitico}
+      - APP_VERSION=${APP_VERSION:-1.0.0}
+      - ENVIRONMENT=${ENVIRONMENT:-development}
+      - DEBUG=${DEBUG:-true}
+      - LOG_LEVEL=${LOG_LEVEL:-DEBUG}
+      - AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION:-us-east-1}
+
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+
+    volumes:
+      # Montamos código en vivo para desarrollo
+      - ./app:/app/app
+      - ./data:/app/data
+      - ./scripts:/app/scripts
+      - ./tests:/app/tests
+
+    networks:
+      - chatbot_network
+
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+    restart: unless-stopped
+
+  # ============ Redis (Cache) - Local ============
+  redis:
+    image: redis:7-alpine
+    container_name: chatbot_redis_local
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks:
+      - chatbot_network
+    restart: unless-stopped
+
+  # ============ PostgreSQL + pgvector - Local ============
+  postgres:
+    image: ankane/pgvector:latest
+    container_name: chatbot_postgres_local
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init_postgres.sql:/docker-entrypoint-initdb.d/init.sql
+      - ./migrations:/migrations
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - chatbot_network
+    restart: unless-stopped
+
+volumes:
+  redis_data:
+    driver: local
+  postgres_data:
+    driver: local
+
+networks:
+  chatbot_network:
+    driver: bridge

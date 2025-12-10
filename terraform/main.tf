@@ -102,3 +102,22 @@ module "compute" {
   ssh_key_name   = var.ssh_key_name
 }
 
+module "monitoring" {
+  source = "./modules/monitoring"
+
+  project_name     = var.project_name
+  environment      = var.environment
+  ec2_instance_id  = module.compute.instance_id
+  rds_instance_id  = module.database.db_instance_id
+  sns_email        = var.monitoring_email
+}
+
+module "billing" {
+  source = "./modules/billing"
+
+  project_name        = var.project_name
+  environment         = var.environment
+  monthly_budget_limit = var.monthly_budget_limit
+  alert_email         = var.monitoring_email
+}
+

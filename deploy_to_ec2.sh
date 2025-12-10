@@ -59,6 +59,24 @@ FINETUNED_ENDPOINT=$(aws ssm get-parameter --name "/chatbot-analitico/prod/api/f
 S3_TRAINING=$(aws ssm get-parameter --name "/chatbot-analitico/prod/s3/training_bucket" --region us-east-1 --query 'Parameter.Value' --output text)
 S3_BACKUPS=$(aws ssm get-parameter --name "/chatbot-analitico/prod/s3/backups_bucket" --region us-east-1 --query 'Parameter.Value' --output text)
 
+# Obtener MySQL URI
+MYSQL_URI=$(aws ssm get-parameter --name "/chatbot-analitico/prod/external/mysql_uri" --region us-east-1 --with-decryption --query 'Parameter.Value' --output text 2>/dev/null || echo "")
+
+# Parsear MySQL URI (formato: mysql://user:pass@host:port/db)
+if [ ! -z "$MYSQL_URI" ] && [ "$MYSQL_URI" != "NOT_CONFIGURED" ] && [ "$MYSQL_URI" != "PLACEHOLDER" ]; then
+  MYSQL_USER=$(echo "$MYSQL_URI" | sed -n 's|.*://\([^:]*\):.*|\1|p')
+  MYSQL_PASSWORD=$(echo "$MYSQL_URI" | sed -n 's|.*://[^:]*:\([^@]*\)@.*|\1|p')
+  MYSQL_HOST=$(echo "$MYSQL_URI" | sed -n 's|.*@\([^:]*\):.*|\1|p')
+  MYSQL_PORT=$(echo "$MYSQL_URI" | sed -n 's|.*:\([0-9]*\)/.*|\1|p')
+  MYSQL_DATABASE=$(echo "$MYSQL_URI" | sed -n 's|.*/\([^?]*\).*|\1|p')
+else
+  MYSQL_USER=""
+  MYSQL_PASSWORD=""
+  MYSQL_HOST=""
+  MYSQL_PORT="3306"
+  MYSQL_DATABASE=""
+fi
+
 echo "📝 Creando archivo .env..."
 
 cat > .env << EOF
@@ -69,12 +87,12 @@ POSTGRES_DB=${DB_NAME}
 POSTGRES_USER=${DB_USER}
 POSTGRES_PASSWORD=${DB_PASS}
 
-# MySQL externo (no configurado)
-MYSQL_HOST=
-MYSQL_PORT=3306
-MYSQL_USER=
-MYSQL_PASSWORD=
-MYSQL_DATABASE=
+# MySQL externo
+MYSQL_HOST=${MYSQL_HOST}
+MYSQL_PORT=${MYSQL_PORT:-3306}
+MYSQL_USER=${MYSQL_USER}
+MYSQL_PASSWORD=${MYSQL_PASSWORD}
+MYSQL_DATABASE=${MYSQL_DATABASE}
 
 # API Keys
 GROQ_API_KEY=${GROQ_KEY}

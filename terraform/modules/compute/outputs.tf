@@ -23,6 +23,11 @@ output "instance_ids" {
   value       = aws_instance.app[*].id
 }
 
+output "instance_id" {
+  description = "ID de la instancia EC2 principal"
+  value       = aws_instance.app[0].id
+}
+
 output "instance_public_ips" {
   description = "EC2 instance public IPs"
   value       = aws_instance.app[*].public_ip

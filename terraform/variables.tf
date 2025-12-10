@@ -66,3 +66,15 @@ variable "external_mysql_uri" {
   default     = "PLACEHOLDER"
 }
 
+variable "monitoring_email" {
+  description = "Email para recibir alertas de CloudWatch"
+  type        = string
+  default     = "tu-email@example.com"
+}
+
+variable "monthly_budget_limit" {
+  description = "Límite de presupuesto mensual en USD"
+  type        = number
+  default     = 25
+}
+

@@ -54,3 +54,23 @@ output "parameter_store_names" {
   value       = module.secrets.parameter_names
 }
 
+output "cloudwatch_log_group" {
+  description = "CloudWatch Log Group para logs de la aplicación"
+  value       = module.monitoring.log_group_name
+}
+
+output "sns_topic_arn" {
+  description = "SNS Topic ARN para alarmas"
+  value       = module.monitoring.sns_topic_arn
+}
+
+output "dashboard_url" {
+  description = "URL del CloudWatch Dashboard"
+  value       = "https://console.aws.amazon.com/cloudwatch/home?region=${var.aws_region}#dashboards:name=${module.monitoring.dashboard_name}"
+}
+
+output "budget_name" {
+  description = "Nombre del presupuesto AWS configurado"
+  value       = module.billing.budget_name
+}
+

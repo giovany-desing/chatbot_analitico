@@ -1,5 +1,5 @@
 output "db_instance_id" {
-  description = "RDS instance ID"
+  description = "ID de la instancia RDS PostgreSQL"
   value       = aws_db_instance.postgres.id
 }
 
