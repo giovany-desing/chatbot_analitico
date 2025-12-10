@@ -41,3 +41,37 @@ env/
 .DS_Store
 Thumbs.db
 
+# Secrets y backups
+.env
+.env.*
+*.env.backup
+backups/
+*.tar.gz
+
+# Terraform
+terraform/.terraform/
+terraform/*.tfstate
+terraform/*.tfstate.backup
+terraform/tfplan*.out
+terraform/.terraform.lock.hcl
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.coverage
+*.egg-info/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# macOS
+.DS_Store
+
+# Docs con ejemplos de secrets
+*_ACTUALIZADO.md
+NOTIFICATIONS_CONFIG.md
