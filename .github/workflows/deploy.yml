@@ -51,23 +51,26 @@ jobs:
         EC2_USER: ec2-user
         SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
       run: |
-        ssh -i ~/.ssh/deploy_key $EC2_USER@$EC2_HOST << 'ENDSSH'
+        ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no $EC2_USER@$EC2_HOST 'bash -s' << 'ENDSSH'
           set -e
-          cd /opt/chatbot
-          
-          # Obtener valores de Parameter Store
-          DB_HOST=$(aws ssm get-parameter --name "/chatbot-analitico/prod/db/host" --region us-east-1 --query 'Parameter.Value' --output text)
-          DB_NAME=$(aws ssm get-parameter --name "/chatbot-analitico/prod/db/name" --region us-east-1 --query 'Parameter.Value' --output text)
-          DB_USER=$(aws ssm get-parameter --name "/chatbot-analitico/prod/db/username" --region us-east-1 --with-decryption --query 'Parameter.Value' --output text)
-          DB_PASS=$(aws ssm get-parameter --name "/chatbot-analitico/prod/db/password" --region us-east-1 --with-decryption --query 'Parameter.Value' --output text)
-          GROQ_KEY=$(aws ssm get-parameter --name "/chatbot-analitico/prod/api/groq_key" --region us-east-1 --with-decryption --query 'Parameter.Value' --output text)
-          MODAL_KEY=$(aws ssm get-parameter --name "/chatbot-analitico/prod/api/modal_key" --region us-east-1 --with-decryption --query 'Parameter.Value' --output text)
+          set -x  # Debug mode
+
+          echo "=== Starting deployment ==="
+          cd /opt/chatbot || exit 1
+
+          echo "=== Getting Parameter Store values ==="
+          DB_HOST=$(aws ssm get-parameter --name "/chatbot-analitico/prod/db/host" --region us-east-1 --query 'Parameter.Value' --output text) || exit 1
+          DB_NAME=$(aws ssm get-parameter --name "/chatbot-analitico/prod/db/name" --region us-east-1 --query 'Parameter.Value' --output text) || exit 1
+          DB_USER=$(aws ssm get-parameter --name "/chatbot-analitico/prod/db/username" --region us-east-1 --with-decryption --query 'Parameter.Value' --output text) || exit 1
+          DB_PASS=$(aws ssm get-parameter --name "/chatbot-analitico/prod/db/password" --region us-east-1 --with-decryption --query 'Parameter.Value' --output text) || exit 1
+          GROQ_KEY=$(aws ssm get-parameter --name "/chatbot-analitico/prod/api/groq_key" --region us-east-1 --with-decryption --query 'Parameter.Value' --output text) || exit 1
+          MODAL_KEY=$(aws ssm get-parameter --name "/chatbot-analitico/prod/api/modal_key" --region us-east-1 --with-decryption --query 'Parameter.Value' --output text) || exit 1
           FINETUNED_ENDPOINT=$(aws ssm get-parameter --name "/chatbot-analitico/prod/api/finetuned_model_endpoint" --region us-east-1 --query 'Parameter.Value' --output text 2>/dev/null || echo "")
-          S3_TRAINING=$(aws ssm get-parameter --name "/chatbot-analitico/prod/s3/training_bucket" --region us-east-1 --query 'Parameter.Value' --output text)
-          S3_BACKUPS=$(aws ssm get-parameter --name "/chatbot-analitico/prod/s3/backups_bucket" --region us-east-1 --query 'Parameter.Value' --output text)
+          S3_TRAINING=$(aws ssm get-parameter --name "/chatbot-analitico/prod/s3/training_bucket" --region us-east-1 --query 'Parameter.Value' --output text) || exit 1
+          S3_BACKUPS=$(aws ssm get-parameter --name "/chatbot-analitico/prod/s3/backups_bucket" --region us-east-1 --query 'Parameter.Value' --output text) || exit 1
           MYSQL_URI=$(aws ssm get-parameter --name "/chatbot-analitico/prod/external/mysql_uri" --region us-east-1 --with-decryption --query 'Parameter.Value' --output text 2>/dev/null || echo "")
-          
-          # Parsear MySQL URI
+
+          echo "=== Parsing MySQL URI ==="
           if [ ! -z "$MYSQL_URI" ] && [ "$MYSQL_URI" != "NOT_CONFIGURED" ] && [ "$MYSQL_URI" != "PLACEHOLDER" ]; then
             MYSQL_USER=$(echo "$MYSQL_URI" | sed -n 's|.*://\([^:]*\):.*|\1|p')
             MYSQL_PASSWORD=$(echo "$MYSQL_URI" | sed -n 's|.*://[^:]*:\([^@]*\)@.*|\1|p')
@@ -81,8 +84,8 @@ jobs:
             MYSQL_PORT="3306"
             MYSQL_DATABASE=""
           fi
-          
-          # Crear .env
+
+          echo "=== Creating .env file ==="
           cat > .env << EOF
           POSTGRES_HOST=${DB_HOST}
           POSTGRES_PORT=5432
@@ -106,30 +109,35 @@ jobs:
           ENVIRONMENT=production
           AWS_DEFAULT_REGION=us-east-1
           EOF
-
-          # Backup current version
+          
+          echo "=== Stopping containers ==="
           docker-compose -f docker-compose.aws.yml down || true
-
-          # Extract new version
+          
+          echo "=== Extracting new version ==="
           sudo rm -rf app/ scripts/ data/ migrations/ requirements.txt Dockerfile docker-compose.aws.yml
           sudo tar -xzf /tmp/app_deploy.tar.gz -C .
           sudo chown -R ec2-user:ec2-user /opt/chatbot
           rm /tmp/app_deploy.tar.gz
 
-          # Rebuild and restart
+          echo "=== Building and starting containers ==="
           docker-compose -f docker-compose.aws.yml up -d --build
 
-          # Wait for health check
-          echo "Esperando a que la aplicación inicie..."
+          echo "=== Waiting for application to start ==="
           sleep 20
 
-          # Verify deployment
-          if curl -f http://localhost:8000/health; then
-            echo "✅ Deployment successful"
-          else
-            echo "❌ Health check failed"
-            exit 1
-          fi
+          echo "=== Running health check ==="
+          for i in {1..5}; do
+            if curl -f http://localhost:8000/health; then
+              echo "✅ Deployment successful!"
+              exit 0
+            fi
+            echo "Retry $i/5..."
+            sleep 5
+          done
+
+          echo "❌ Health check failed after 5 retries"
+          docker-compose -f docker-compose.aws.yml logs --tail=50 app
+          exit 1
         ENDSSH
 
     - name: Notify deployment status
