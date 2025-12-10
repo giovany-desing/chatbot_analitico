@@ -36,14 +36,34 @@ jobs:
         EC2_USER: ec2-user
         SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
       run: |
+        set -x  # Debug mode
+
         # Setup SSH
         mkdir -p ~/.ssh
         echo "$SSH_PRIVATE_KEY" > ~/.ssh/deploy_key
         chmod 600 ~/.ssh/deploy_key
-        ssh-keyscan -H $EC2_HOST >> ~/.ssh/known_hosts
+
+        # Verificar que la clave tiene el formato correcto
+        echo "=== Verificando clave SSH ==="
+        head -1 ~/.ssh/deploy_key
+        tail -1 ~/.ssh/deploy_key
+
+        # Verificar conectividad
+        echo "=== Probando conectividad SSH ==="
+        ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o ConnectTimeout=10 $EC2_USER@$EC2_HOST "echo 'SSH connection OK'"
+
+        # Add to known hosts
+        ssh-keyscan -H $EC2_HOST >> ~/.ssh/known_hosts 2>/dev/null || true
+
+        # Verificar que el archivo existe
+        echo "=== Verificando archivo de deploy ==="
+        ls -lh app_deploy.tar.gz
 
         # Upload deployment package
-        scp -i ~/.ssh/deploy_key app_deploy.tar.gz $EC2_USER@$EC2_HOST:/tmp/
+        echo "=== Uploading deployment package ==="
+        scp -v -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no app_deploy.tar.gz $EC2_USER@$EC2_HOST:/tmp/
+
+        echo "=== Upload successful ==="
 
     - name: Deploy on EC2
       env:
